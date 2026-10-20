@@ -1,0 +1,50 @@
+{
+  "1241:41118:1:1": {
+    "vendor_id": 1241,
+    "product_id": 41118,
+    "vid_hex": "0x4d9",
+    "pid_hex": "0xa09e",
+    "name": "USB Gaming Mouse",
+    "manufacturer": "E-Signal/A-One",
+    "usage_page": 1,
+    "usage": 128,
+    "interface": 1,
+    "path": "b'\\\\\\\\?\\\\HID#VID_04D9&PID_A09E&MI_01&Col02#7&136e399&0&0001#{4d1e55b2-f16f-11cf-88cb-001111000030}'"
+  },
+  "1241:41118:1:0": {
+    "vendor_id": 1241,
+    "product_id": 41118,
+    "vid_hex": "0x4d9",
+    "pid_hex": "0xa09e",
+    "name": "USB Gaming Mouse",
+    "manufacturer": "E-Signal/A-One",
+    "usage_page": 1,
+    "usage": 2,
+    "interface": 0,
+    "path": "b'\\\\\\\\?\\\\HID#VID_04D9&PID_A09E&MI_00#7&18fa6fde&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}'"
+  },
+  "1241:41118:12:1": {
+    "vendor_id": 1241,
+    "product_id": 41118,
+    "vid_hex": "0x4d9",
+    "pid_hex": "0xa09e",
+    "name": "USB Gaming Mouse",
+    "manufacturer": "E-Signal/A-One",
+    "usage_page": 12,
+    "usage": 1,
+    "interface": 1,
+    "path": "b'\\\\\\\\?\\\\HID#VID_04D9&PID_A09E&MI_01&Col03#7&136e399&0&0002#{4d1e55b2-f16f-11cf-88cb-001111000030}'"
+  },
+  "9114:33012:1:5": {
+    "vendor_id": 9114,
+    "product_id": 33012,
+    "vid_hex": "0x239a",
+    "pid_hex": "0x80f4",
+    "name": "CircuitPython HID",
+    "manufacturer": "Raspberry Pi",
+    "usage_page": 1,
+    "usage": 5,
+    "interface": 5,
+    "path": "b'\\\\\\\\?\\\\HID#VID_239A&PID_80F4&MI_05#7&197e374&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}'"
+  }
+}
