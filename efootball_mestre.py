@@ -1,18 +1,19 @@
 """
 ================================================================================
-   EFOOTBALL MASTER AI & CONTROLLER HUB - ALL-IN-ONE (VERSÃO REATORADA V2)
+   EFOOTBALL MASTER AI & CONTROLLER HUB - ALL-IN-ONE (VERSÃO V2.1 BLINDADA)
 ================================================================================
 Projeto Unificado de Assistência Tática em Tempo Real para eFootball (PC).
 Compatível com versões MICROSOFT STORE / XBOX APP e STEAM.
 
-Melhorias da V2:
+Destaques da V2.1:
 - Mira Automática 360° Real (Injeção vetorial no RP2040 e 8-Way no DirectX)
-- Máquina de Estados Não-Bloqueante (Zero travamento do controle durante passes)
+- Máquina de Estados Não-Bloqueante com Sincronia Bit-a-Bit (Suporta Duplo Toque D+D no RP2040)
 - Escala Anisotrópica Oficial FIFA/IFAB (105m x 68m)
-- Rastreamento Cinemático com Associação Global e Desaglutinação de Contornos
-- Equação de Bhaskara com Velocidade Dinâmica por Tipo de Passe e Atrito
+- Rastreamento Cinemático Global + Desaglutinação por Transformada de Distância (Escanteios)
+- Equação de Bhaskara de 2 Estágios (Recalcula interceptação conforme velocidade do tipo de passe)
+- Memória de Orientação Corporal (Contra-Pé preciso mesmo com jogador parado)
+- Modo Desafogo Direcional Rápido (Quick-Release contra botes frontais < 1.9m)
 - Regra de Impedimento IFAB Completa (Meio-Campo + Compensação de Goleiro Ocluso)
-- Alinhamento ctypes SendInput 64-bit nativo
 ================================================================================
 """
 
@@ -108,6 +109,28 @@ SCAN_LEFT = 0x4B
 SCAN_RIGHT = 0x4D
 EXTENDED_SCANS = {SCAN_UP, SCAN_DOWN, SCAN_LEFT, SCAN_RIGHT}
 
+# Constantes de botões do Gamepad (RP2040 Bridge)
+BTN_A = 0
+BTN_B = 1
+BTN_X = 2
+BTN_Y = 3
+BTN_LB = 4
+BTN_RB = 5
+BTN_LT_DIGITAL = 10
+BTN_RT_DIGITAL = 11
+
+# Mapeamento automático Scancode -> Bit de Botão RP2040 para sincronia de múltiplos toques
+SCANCODE_TO_RP2040_BTN = {
+    SCAN_S: (1 << BTN_A),
+    SCAN_D: (1 << BTN_B),
+    SCAN_A: (1 << BTN_X),
+    SCAN_W: (1 << BTN_Y),
+    SCAN_Q: (1 << BTN_LB),
+    SCAN_C: (1 << BTN_RB),
+    SCAN_Z: (1 << BTN_LT_DIGITAL),
+    SCAN_E: (1 << BTN_RT_DIGITAL),
+}
+
 _ignorando_hook = False
 
 def directx_press(scancode):
@@ -157,7 +180,6 @@ def obter_scancodes_direcao(dx, dy):
         return []
     ux, uy = dx / norm, dy / norm
     teclas = []
-    # Limiar de sin(22.5°) = 0.3826 para ativar diagonais precisas
     if ux > 0.3826:
         teclas.append(SCAN_RIGHT)
     elif ux < -0.3826:
@@ -198,16 +220,6 @@ DEFAULT_CONFIG = {
 CAMPO_LARGURA_M = 105.0
 CAMPO_ALTURA_M = 68.0
 
-# Constantes de botões do Gamepad
-BTN_A = 0
-BTN_B = 1
-BTN_X = 2
-BTN_Y = 3
-BTN_LB = 4
-BTN_RB = 5
-BTN_LT_DIGITAL = 10
-BTN_RT_DIGITAL = 11
-
 
 # ==============================================================================
 # 3. MOTOR DE VISÃO COMPUTACIONAL, CINEMÁTICA E BALÍSTICA (OPENCV)
@@ -243,10 +255,8 @@ class KinematicPlayerTracker:
             dt = max(0.008, min(0.20, current_time - self.last_time))
         self.last_time = current_time
 
-        # Calcula todos os pares possíveis (tid, det_idx, dist_m) e ordena globalmente
         pares_candidatos = []
         for tid, track in self.tracks.items():
-            # Predição linear simples para melhorar o pareamento em alta velocidade
             pred_px = (
                 track['pos'][0] + (track['vel_mps'][0] * dt) / self.scale_x,
                 track['pos'][1] + (track['vel_mps'][1] * dt) / self.scale_y
@@ -274,7 +284,6 @@ class KinematicPlayerTracker:
             vy_raw = ((pt[1] - track['pos'][1]) * self.scale_y) / dt
 
             speed_mps = math.hypot(vx_raw, vy_raw)
-            # Velocidade humana máxima no jogo (~11.5 m/s = 41.4 km/h)
             if speed_mps > 11.5:
                 escala = 11.5 / speed_mps
                 vx_raw *= escala
@@ -288,14 +297,12 @@ class KinematicPlayerTracker:
             self.tracks[tid] = {'pos': pt, 'vel_mps': (vx_smooth, vy_smooth), 'lost': 0}
             matched_velocities_mps[pt] = (vx_smooth, vy_smooth)
 
-        # Incrementa contadores de perda para tracks não associadas
         for tid in list(self.tracks.keys()):
             if tid not in tracks_usadas:
                 self.tracks[tid]['lost'] += 1
                 if self.tracks[tid]['lost'] > 5:
                     del self.tracks[tid]
 
-        # Cria novas tracks para detecções novas
         for idx, pt in enumerate(detected_pts):
             if idx not in dets_usadas:
                 tid = self.next_id
@@ -317,14 +324,11 @@ def calcular_forca_balistica(distancia_metros, tipo_passe="RASTEIRO"):
 
     if tipo_passe in ("CAVADO_ARCO", "BALAO_ALTO", "ANTECIPADO"):
         forca_barra = min(1.0, forca_barra * 1.10)
-        # Bola aérea tem velocidade horizontal menor devido ao arco parabólico
         vel_bola_mps = 14.5 + 7.5 * dist_norm
     elif tipo_passe in ("FENOMENAL_CURVA", "FENOMENAL"):
         forca_barra = min(1.0, forca_barra * 1.05)
-        # Passe fenomenal (RT) sai com alta velocidade
         vel_bola_mps = 22.0 + 10.0 * dist_norm
     else:
-        # Passe rasteiro padrão (desacelera com o atrito do gramado)
         vel_bola_mps = 16.5 + 8.5 * dist_norm
 
     forca_barra = max(0.16, min(1.0, forca_barra))
@@ -338,6 +342,7 @@ class RadarPassesEFootball:
         self.scale_x = CAMPO_LARGURA_M / float(self.roi["width"])
         self.scale_y = CAMPO_ALTURA_M / float(self.roi["height"])
         self.kinematic_tracker = KinematicPlayerTracker(self.scale_x, self.scale_y, alpha=0.60)
+        self.ultima_orientacao_portador = (1.0, 0.0)
 
         # Faixas de cor HSV calibradas para o eFootball
         self.verde_min = np.array([35, 45, 45])
@@ -350,10 +355,43 @@ class RadarPassesEFootball:
     def dist_metros(self, p1, p2):
         return math.hypot((p1[0] - p2[0]) * self.scale_x, (p1[1] - p2[1]) * self.scale_y)
 
-    def _extrair_pontos_de_mascara(self, mascara, area_min=4, area_single_max=55, area_merged_max=220):
+    def _resolver_intercepcao_bhaskara(self, portador, comp, vx_m, vy_m, v_bola_mps):
+        """Resolve analiticamente o ponto futuro (x, y) para uma velocidade de bola específica."""
+        largura_campo = self.roi["width"]
+        altura_campo = self.roi["height"]
+        dx0_m = (comp[0] - portador[0]) * self.scale_x
+        dy0_m = (comp[1] - portador[1]) * self.scale_y
+        dist_atual_m = math.hypot(dx0_m, dy0_m)
+
+        A = (vx_m**2 + vy_m**2) - (v_bola_mps**2)
+        B = 2.0 * (dx0_m * vx_m + dy0_m * vy_m)
+        C = dx0_m**2 + dy0_m**2
+        discriminante = B**2 - 4.0 * A * C
+
+        t_star = None
+        if discriminante >= 0 and abs(A) > 1e-4:
+            sqrt_disc = math.sqrt(discriminante)
+            t1 = (-B - sqrt_disc) / (2.0 * A)
+            t2 = (-B + sqrt_disc) / (2.0 * A)
+            candidatos_t = [t for t in (t1, t2) if t > 0.05]
+            if candidatos_t:
+                t_star = min(candidatos_t)
+
+        if t_star is None or t_star > 1.80:
+            t_star = dist_atual_m / max(10.0, v_bola_mps)
+        t_star = max(0.08, min(1.15, t_star))
+
+        pred_x = int(round(comp[0] + (vx_m * t_star) / self.scale_x))
+        pred_y = int(round(comp[1] + (vy_m * t_star) / self.scale_y))
+        return (
+            max(3, min(largura_campo - 3, pred_x)),
+            max(3, min(altura_campo - 3, pred_y))
+        )
+
+    def _extrair_pontos_de_mascara(self, mascara, area_min=4, area_single_max=52, area_merged_max=420):
         """
-        Extrai centroides de jogadores e subdivide contornos aglutinados
-        quando 2 jogadores do mesmo time estão colados no radar.
+        Extrai centroides de jogadores e desaglutina aglomerações de 2 a 6 jogadores
+        (ex: escanteios na pequena área) usando Transformada de Distância (Distance Transform).
         """
         contornos, _ = cv2.findContours(mascara, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         pontos = []
@@ -366,14 +404,34 @@ class RadarPassesEFootball:
                 if M["m00"] > 0:
                     pontos.append((int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])))
             else:
-                # Contorno aglutinado (2 jogadores colados): separa pelo eixo maior do bounding box
+                # Múltiplos jogadores colados: isola o ROI do contorno e aplica Distance Transform
                 x, y, w, h = cv2.boundingRect(c)
-                if w >= h:
-                    pontos.append((int(x + w * 0.28), int(y + h * 0.50)))
-                    pontos.append((int(x + w * 0.72), int(y + h * 0.50)))
+                sub_mask = np.zeros((h + 4, w + 4), dtype=np.uint8)
+                c_shifted = c - np.array([[x - 2, y - 2]])
+                cv2.drawContours(sub_mask, [c_shifted], -1, 255, -1)
+
+                dist_map = cv2.distanceTransform(sub_mask, cv2.DIST_L2, 3)
+                kernel_max = np.ones((5, 5), np.uint8)
+                dilated = cv2.dilate(dist_map, kernel_max)
+                picos_y, picos_x = np.where((dist_map == dilated) & (dist_map >= 1.4))
+
+                picos_filtrados = []
+                for px, py in zip(picos_x, picos_y):
+                    pt_global = (int(x - 2 + px), int(y - 2 + py))
+                    if all(math.hypot(pt_global[0] - p[0], pt_global[1] - p[1]) >= 4.0 for p in picos_filtrados):
+                        picos_filtrados.append(pt_global)
+
+                if len(picos_filtrados) >= 2:
+                    pontos.extend(picos_filtrados[:6])
                 else:
-                    pontos.append((int(x + w * 0.50), int(y + h * 0.28)))
-                    pontos.append((int(x + w * 0.50), int(y + h * 0.72)))
+                    # Fallback geométrico proporcional ao número estimado de jogadores
+                    n_est = max(2, min(4, int(round(area / 32.0))))
+                    for k in range(n_est):
+                        frac = (k + 0.5) / n_est
+                        if w >= h:
+                            pontos.append((int(x + w * frac), int(y + h * 0.50)))
+                        else:
+                            pontos.append((int(x + w * 0.50), int(y + h * frac)))
         return pontos
 
     def processar_frame(self, frame_bgr, cursor_anterior=None, bola_anterior=None):
@@ -394,7 +452,7 @@ class RadarPassesEFootball:
 
         todos_jogadores = verdes + vermelhos
 
-        # 3. Anel Amarelo/Dourado do Cursor (Escolhe o melhor candidato próximo a um jogador real)
+        # 3. Anel Amarelo/Dourado do Cursor
         masc_anel = cv2.inRange(hsv, np.array([16, 65, 115]), np.array([38, 255, 255]))
         masc_anel = cv2.dilate(masc_anel, kernel, iterations=1)
         contornos_a, _ = cv2.findContours(masc_anel, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -414,7 +472,7 @@ class RadarPassesEFootball:
                         melhor_score_anel = score_a
                         cursor_usuario = cand
 
-        # 4. Ponto da Bola (Filtra linhas do campo priorizando circularidade e proximidade temporal)
+        # 4. Ponto da Bola
         masc_bola = cv2.inRange(hsv, np.array([0, 0, 190]), np.array([180, 50, 255]))
         contornos_b, _ = cv2.findContours(masc_bola, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -428,7 +486,7 @@ class RadarPassesEFootball:
                     continue
                 circularidade = 4 * math.pi * area_b / (perimetro * perimetro)
                 if circularidade < 0.35:
-                    continue  # Descarta segmentos retos das linhas brancas do campo
+                    continue
                 Mb = cv2.moments(cb)
                 if Mb["m00"] > 0:
                     cand_b = (int(Mb["m10"] / Mb["m00"]), int(Mb["m01"] / Mb["m00"]))
@@ -451,7 +509,6 @@ class RadarPassesEFootball:
         largura_campo = self.roi["width"]
         xs_adv = sorted([adv[0] for adv in adversarios], reverse=atacando_direita)
 
-        # Verifica se há um goleiro detectado próximo à linha de fundo (últimos 14 pixels ~ 5.6m)
         if atacando_direita:
             tem_goleiro_detectado = (xs_adv[0] >= largura_campo - 14)
         else:
@@ -460,8 +517,6 @@ class RadarPassesEFootball:
         if tem_goleiro_detectado and len(xs_adv) >= 2:
             return xs_adv[1]
         else:
-            # Se o goleiro está oculto pela linha da trave no radar, o jogador mais recuado
-            # detectado na lista JÁ É o último zagueiro de linha (penúltimo defensor real)!
             return xs_adv[0]
 
     def analisar_linhas_de_passe(self, portador, companheiros, adversarios, atacando_direita=True, linha_zaga=None, analog_dir=(0.0, 0.0), modo_desafogo=True):
@@ -472,12 +527,29 @@ class RadarPassesEFootball:
         meio_campo_x = largura_campo / 2.0
         gol_alvo_x = largura_campo if atacando_direita else 0
 
-        # Rastreia o portador junto com os companheiros para obter a inércia/velocidade do condutor
         todos_meus = [portador] + [c for c in companheiros if c != portador]
         velocidades_mps = self.kinematic_tracker.update(todos_meus)
         vx_port_m, vy_port_m = velocidades_mps.get(portador, (0.0, 0.0))
         portador_speed_mps = math.hypot(vx_port_m, vy_port_m)
-        dist_adv_mais_proximo = min([self.dist_metros(portador, adv) for adv in adversarios], default=99.0)
+
+        # Atualiza a memória de orientação corporal do portador
+        an_x, an_y = analog_dir
+        an_norm = math.hypot(an_x, an_y)
+        if portador_speed_mps > 1.2:
+            self.ultima_orientacao_portador = (vx_port_m / portador_speed_mps, vy_port_m / portador_speed_mps)
+        elif an_norm > 0.18:
+            self.ultima_orientacao_portador = (an_x / an_norm, an_y / an_norm)
+
+        orient_x, orient_y = self.ultima_orientacao_portador
+
+        # Encontra o adversário mais próximo e seu vetor relativo ao portador
+        adv_mais_prox = None
+        dist_adv_mais_proximo = 99.0
+        for adv in adversarios:
+            d_adv = self.dist_metros(portador, adv)
+            if d_adv < dist_adv_mais_proximo:
+                dist_adv_mais_proximo = d_adv
+                adv_mais_prox = adv
 
         for comp in companheiros:
             dist_atual_m = self.dist_metros(portador, comp)
@@ -487,48 +559,16 @@ class RadarPassesEFootball:
             vx_m, vy_m = velocidades_mps.get(comp, (0.0, 0.0))
             comp_speed_mps = math.hypot(vx_m, vy_m)
 
-            # Estimativa inicial da velocidade da bola baseada na distância atual
-            _, _, v_bola_mps = calcular_forca_balistica(dist_atual_m, "RASTEIRO")
+            # Passo 1 de Bhaskara: Estimativa com velocidade rasteira
+            _, _, v_bola_rasteira = calcular_forca_balistica(dist_atual_m, "RASTEIRO")
+            destino_futuro = self._resolver_intercepcao_bhaskara(portador, comp, vx_m, vy_m, v_bola_rasteira)
 
-            # Equação Quadrática de Interceptação (Bhaskara em Metros Reais)
-            dx0_m = (comp[0] - portador[0]) * self.scale_x
-            dy0_m = (comp[1] - portador[1]) * self.scale_y
-
-            A = (vx_m**2 + vy_m**2) - (v_bola_mps**2)
-            B = 2.0 * (dx0_m * vx_m + dy0_m * vy_m)
-            C = dx0_m**2 + dy0_m**2
-            discriminante = B**2 - 4.0 * A * C
-
-            t_star = None
-            if discriminante >= 0 and abs(A) > 1e-4:
-                sqrt_disc = math.sqrt(discriminante)
-                t1 = (-B - sqrt_disc) / (2.0 * A)
-                t2 = (-B + sqrt_disc) / (2.0 * A)
-                candidatos_t = [t for t in (t1, t2) if t > 0.05]
-                if candidatos_t:
-                    t_star = min(candidatos_t)
-
-            if t_star is None or t_star > 1.80:
-                t_star = dist_atual_m / v_bola_mps
-            # Cap de predição: no máximo 1.15s à frente para evitar extrapolações fora do campo
-            t_star = max(0.08, min(1.15, t_star))
-
-            pred_x = int(round(comp[0] + (vx_m * t_star) / self.scale_x))
-            pred_y = int(round(comp[1] + (vy_m * t_star) / self.scale_y))
-            destino_futuro = (
-                max(3, min(largura_campo - 3, pred_x)),
-                max(3, min(altura_campo - 3, pred_y))
-            )
-
-            # Vetor de passe no espaço métrico para checagem de bloqueio e mira 360°
             dx_fut_m = (destino_futuro[0] - portador[0]) * self.scale_x
             dy_fut_m = (destino_futuro[1] - portador[1]) * self.scale_y
             dist_fut_m = math.hypot(dx_fut_m, dy_fut_m)
             if dist_fut_m < 2.0:
                 continue
 
-            # Vetor unitário 360° para injeção no analógico / setas
-            vetor_direcao = (dx_fut_m / dist_fut_m, dy_fut_m / dist_fut_m)
             ang_passe_m = math.atan2(dy_fut_m, dx_fut_m)
 
             # Cone anti-bloqueio em metros reais
@@ -544,7 +584,6 @@ class RadarPassesEFootball:
                     proj_m = (dx_adv_m * dx_fut_m + dy_adv_m * dy_fut_m) / (dist_fut_m + 1e-5)
                     if 0.5 < proj_m < dist_fut_m:
                         perp_m = abs(dx_adv_m * math.sin(ang_passe_m) - dy_adv_m * math.cos(ang_passe_m))
-                        # Raio de interceptação do zagueiro cresce proporcionalmente ao tempo de voo da bola
                         margem_seg_m = 1.8 + (proj_m / dist_fut_m) * 2.8
                         if perp_m < margem_seg_m:
                             bloqueado = True
@@ -553,9 +592,7 @@ class RadarPassesEFootball:
                                 bloqueio_muito_proximo = True
                             break
 
-            # Regra Oficial de Impedimento IFAB (Lei 11):
-            # 1. Não há impedimento no próprio campo de defesa
-            # 2. Não há impedimento se o recebedor estiver atrás ou na linha da bola
+            # Regra Oficial de Impedimento IFAB (Lei 11)
             impedido = False
             rompimento = False
 
@@ -575,15 +612,33 @@ class RadarPassesEFootball:
                         rompimento = True
 
             # Seleção Inteligente da Modalidade do Lançamento
+            if bloqueado:
+                tipo_passe = "CAVADO_ARCO"
+            else:
+                if (rompimento and dist_fut_m > 20.0) or dist_fut_m > 28.0:
+                    tipo_passe = "FENOMENAL_CURVA"
+                else:
+                    tipo_passe = "RASTEIRO"
+
+            # Passo 2 de Bhaskara: Se o tipo de passe mudou para aéreo ou fenomenal,
+            # recalcula o ponto de interceptação futuro e o vetor 360° com a velocidade exata da modalidade!
+            if tipo_passe != "RASTEIRO":
+                _, _, v_bola_real = calcular_forca_balistica(dist_fut_m, tipo_passe)
+                destino_futuro = self._resolver_intercepcao_bhaskara(portador, comp, vx_m, vy_m, v_bola_real)
+                dx_fut_m = (destino_futuro[0] - portador[0]) * self.scale_x
+                dy_fut_m = (destino_futuro[1] - portador[1]) * self.scale_y
+                dist_fut_m = max(2.0, math.hypot(dx_fut_m, dy_fut_m))
+
+            vetor_direcao = (dx_fut_m / dist_fut_m, dy_fut_m / dist_fut_m)
+            forca_b, tempo_ms, _ = calcular_forca_balistica(dist_fut_m, tipo_passe=tipo_passe)
+
+            # Gera arco visual no HUD caso o passe seja cavado
             pontos_arco = []
             apex = None
-
-            if bloqueado:
-                # Se há zagueiro na linha de passe, SEMPRE usa passe cavado por cobertura (LB+W)
-                tipo_passe = "CAVADO_ARCO"
-                # Gera arco visual no HUD para indicar cobertura
-                n_x = -(destino_futuro[1] - portador[1]) / (math.hypot(destino_futuro[0] - portador[0], destino_futuro[1] - portador[1]) + 1e-5)
-                n_y = (destino_futuro[0] - portador[0]) / (math.hypot(destino_futuro[0] - portador[0], destino_futuro[1] - portador[1]) + 1e-5)
+            if tipo_passe == "CAVADO_ARCO":
+                dist_px_chord = math.hypot(destino_futuro[0] - portador[0], destino_futuro[1] - portador[1]) + 1e-5
+                n_x = -(destino_futuro[1] - portador[1]) / dist_px_chord
+                n_y = (destino_futuro[0] - portador[0]) / dist_px_chord
                 apx = int((portador[0] + destino_futuro[0]) * 0.5 + n_x * 12.0)
                 apy = int((portador[1] + destino_futuro[1]) * 0.5 + n_y * 12.0)
                 apex = (max(2, min(largura_campo - 2, apx)), max(2, min(altura_campo - 2, apy)))
@@ -592,53 +647,24 @@ class RadarPassesEFootball:
                     bx = int((1.0 - t_b)**2 * portador[0] + 2.0 * (1.0 - t_b) * t_b * apex[0] + t_b**2 * destino_futuro[0])
                     by = int((1.0 - t_b)**2 * portador[1] + 2.0 * (1.0 - t_b) * t_b * apex[1] + t_b**2 * destino_futuro[1])
                     pontos_arco.append((bx, by))
-            else:
-                # Corredor livre: usa Passe Fenomenal (RT+W) se for lançamento longo ou facão em distância média/longa
-                if (rompimento and dist_fut_m > 20.0) or dist_fut_m > 28.0:
-                    tipo_passe = "FENOMENAL_CURVA"
-                else:
-                    tipo_passe = "RASTEIRO"
 
-            forca_b, tempo_ms, _ = calcular_forca_balistica(dist_fut_m, tipo_passe=tipo_passe)
+            # 1. Alinhamento Corporal (Contra-Pé com memória de última orientação)
+            cos_alinhamento = orient_x * vetor_direcao[0] + orient_y * vetor_direcao[1]
 
-            # 1. Ponderação de Contra-Pé e Inércia do Portador (Zero Contras)
-            if portador_speed_mps > 1.2:
-                # Portador correndo: usa vetor cinemático do radar
-                cos_alinhamento = (vx_port_m * dx_fut_m + vy_port_m * dy_fut_m) / (portador_speed_mps * dist_fut_m + 1e-5)
-            else:
-                # Portador parado/lento: consulta o analógico esquerdo real do controle
-                an_x, an_y = analog_dir
-                an_norm = math.hypot(an_x, an_y)
-                if an_norm > 0.15:
-                    cos_alinhamento = (an_x * dx_fut_m + an_y * dy_fut_m) / (an_norm * dist_fut_m + 1e-5)
-                else:
-                    cos_alinhamento = 0.0  # Neutro: sem penalidade para jogador parado
-
-            # 2. Modo Desafogo Rápido Sob Pressão Imediata (Zero Contras)
+            # 2. Modo Desafogo Direcional Rápido Sob Pressão (< 1.9m)
             sob_pressao_alta = False
-            if modo_desafogo and dist_adv_mais_proximo < 1.9:
+            if modo_desafogo and adv_mais_prox is not None and dist_adv_mais_proximo < 1.9:
                 sob_pressao_alta = True
-                # Quick-Release: reduz tempo de carregamento da barra para o passe sair antes do bote
-                tempo_ms = max(85, int(tempo_ms * 0.78))
-                # Se o adversário estiver colado de frente (< 1.4m), converte em cavado por cobertura
-                if dist_adv_mais_proximo < 1.4 and tipo_passe != "CAVADO_ARCO":
-                    tipo_passe = "CAVADO_ARCO"
-                    n_x = -(destino_futuro[1] - portador[1]) / (math.hypot(destino_futuro[0] - portador[0], destino_futuro[1] - portador[1]) + 1e-5)
-                    n_y = (destino_futuro[0] - portador[0]) / (math.hypot(destino_futuro[0] - portador[0], destino_futuro[1] - portador[1]) + 1e-5)
-                    apx = int((portador[0] + destino_futuro[0]) * 0.5 + n_x * 10.0)
-                    apy = int((portador[1] + destino_futuro[1]) * 0.5 + n_y * 10.0)
-                    apex = (max(2, min(largura_campo - 2, apx)), max(2, min(altura_campo - 2, apy)))
-                    pontos_arco = []
-                    for step in range(8):
-                        t_b = step / 7.0
-                        bx = int((1.0 - t_b)**2 * portador[0] + 2.0 * (1.0 - t_b) * t_b * apex[0] + t_b**2 * destino_futuro[0])
-                        by = int((1.0 - t_b)**2 * portador[1] + 2.0 * (1.0 - t_b) * t_b * apex[1] + t_b**2 * destino_futuro[1])
-                        pontos_arco.append((bx, by))
+                # Se for passe fenomenal, cancela o RT sob pressão para evitar animação longa de 0.6s
+                if tipo_passe == "FENOMENAL_CURVA":
+                    tipo_passe = "RASTEIRO"
+                    forca_b, tempo_ms, _ = calcular_forca_balistica(dist_fut_m, tipo_passe="RASTEIRO")
+                # Só encurta o tempo de barra em passes rasteiros (não enfraquece passes cavados)
+                if tipo_passe == "RASTEIRO":
+                    tempo_ms = max(85, int(tempo_ms * 0.82))
 
             avanco_ofensivo_m = ((destino_futuro[0] - portador[0]) if atacando_direita else (portador[0] - destino_futuro[0])) * self.scale_x
             dist_gol_m = abs(gol_alvo_x - destino_futuro[0]) * self.scale_x
-
-            # Folga de marcação do recebedor no ponto futuro
             folga_rec_m = min([self.dist_metros(destino_futuro, adv) for adv in adversarios], default=25.0)
 
             score = 100.0 - dist_gol_m * 1.15 + avanco_ofensivo_m * 1.10 + (comp_speed_mps * 3.6) * 0.45 + min(10.0, folga_rec_m * 1.2)
@@ -649,7 +675,6 @@ class RadarPassesEFootball:
             if rompimento:
                 score += 35.0
 
-            # Ajuste de score por alinhamento corporal (Contra-Pé)
             if cos_alinhamento > 0.50:
                 score += 15.0 * cos_alinhamento
             elif cos_alinhamento < -0.30:
@@ -699,7 +724,6 @@ class RadarPassesEFootball:
 
         dist_fundo_m = abs(gol_alvo_x - portador[0]) * self.scale_x
 
-        # Posições das traves em relação ao centro do gol (~9m de deslocamento lateral na pequena área)
         offset_trave_px = int(9.0 / self.scale_y)
         y_trave_sup = int(centro_y - offset_trave_px)
         y_trave_inf = int(centro_y + offset_trave_px)
@@ -718,7 +742,6 @@ class RadarPassesEFootball:
             if dist_gol_x_m > 26.0:
                 continue
 
-            # Regra IFAB de Impedimento para Cruzamento
             impedido = False
             no_campo_ataque = (comp[0] > meio_campo_x) if atacando_direita else (comp[0] < meio_campo_x)
             if not no_escanteio and linha_zaga is not None and no_campo_ataque:
@@ -964,6 +987,7 @@ class TelemetriaPasses:
                 "dist_m": dist,
                 "tempo_ms": int(tempo_ms),
                 "aereo": aereo,
+                "tipo_passe": tipo_p,
                 "origem": origem,
                 "alvo_pos": alvo,
                 "destino_futuro": df,
@@ -1130,7 +1154,7 @@ class EstadoSistema:
 
 
 # ==============================================================================
-# 5. PONTE DE HARDWARE RP2040 & EXECUTOR ASSÍNCRONO NÃO-BLOQUEANTE
+# 5. PONTE DE HARDWARE RP2040 & EXECUTOR ASSÍNCRONO BIT-A-BIT
 # ==============================================================================
 def encontrar_porta_rp2040():
     portas = list(serial.tools.list_ports.comports())
@@ -1154,29 +1178,28 @@ def enviar_relatorio_rp2040(ser, buttons, lx, ly, rx, ry):
 
 class ExecutorAcaoAssincrono:
     """
-    Máquina de estados não-bloqueante para disparar passes, modificadores (LB/RT)
-    e mira direcional 360° sem pausar o loop de 500Hz+ do controle físico.
+    Máquina de estados não-bloqueante que sincroniza os eventos de DirectX e os
+    bits de botão do RP2040 em tempo real (permitindo toques duplos D+D perfeitos).
     """
     def __init__(self):
         self.lock = threading.Lock()
         self.ativo = False
-        self.eventos_dx = []       # Lista de (timestamp_execucao, funcao, arg)
+        self.eventos_dx = []
         self.fim_acao_ts = 0.0
         self.override_lx = None
         self.override_ly = None
         self.override_btns = 0
         self.teclas_direcao_ativas = []
 
-    def agendar_sequencia(self, etapas_dx, duracao_total_s, vetor_dir=None, usar_mira_teclado=False, rp2040_btns=0):
+    def agendar_sequencia(self, etapas_dx, duracao_total_s, vetor_dir=None, usar_mira_teclado=False):
         agora = time.perf_counter()
         with self.lock:
-            # Limpa estado anterior caso exista
             directx_liberar_tudo()
             self.eventos_dx.clear()
 
             self.ativo = True
-            self.fim_acao_ts = agora + duracao_total_s + 0.035
-            self.override_btns = rp2040_btns
+            self.fim_acao_ts = agora + duracao_total_s
+            self.override_btns = 0
 
             if vetor_dir is not None:
                 self.override_lx, self.override_ly = vetor_dir[0], vetor_dir[1]
@@ -1193,7 +1216,7 @@ class ExecutorAcaoAssincrono:
             self.eventos_dx.sort(key=lambda x: x[0])
 
     def atualizar(self):
-        """Chamado a cada ciclo de 1-2ms da thread de controle."""
+        """Chamado a cada ciclo de ~1ms da thread de controle."""
         agora = time.perf_counter()
         with self.lock:
             if not self.ativo:
@@ -1202,6 +1225,12 @@ class ExecutorAcaoAssincrono:
             while self.eventos_dx and agora >= self.eventos_dx[0][0]:
                 _, fn, sc = self.eventos_dx.pop(0)
                 fn(sc)
+                # Atualiza os bits de botão do RP2040 sincronizados com cada press/release
+                bit_rp = SCANCODE_TO_RP2040_BTN.get(sc, 0)
+                if fn == directx_press:
+                    self.override_btns |= bit_rp
+                elif fn == directx_release:
+                    self.override_btns &= ~bit_rp
 
             if agora >= self.fim_acao_ts and not self.eventos_dx:
                 directx_liberar_tudo()
@@ -1216,7 +1245,7 @@ class ExecutorAcaoAssincrono:
 
 
 # ==============================================================================
-# 6. THREAD DE CONTROLE E DISPARO DE AÇÕES (DIRECTX + RP2040 A 500Hz+)
+# 6. THREAD DE CONTROLE E DISPARO DE AÇÕES (DIRECTX + RP2040 A ~1000Hz)
 # ==============================================================================
 def thread_controle_execucao(estado: EstadoSistema):
     ser = None
@@ -1256,14 +1285,15 @@ def thread_controle_execucao(estado: EstadoSistema):
             ly = vader.get_axis(1) if vader else 0.0
             rx = vader.get_axis(2) if (vader and vader.get_numaxes() > 2) else 0.0
             ry = vader.get_axis(3) if (vader and vader.get_numaxes() > 3) else 0.0
-            estado.analog_dir = (lx, ly)
+            with estado.lock:
+                estado.analog_dir = (lx, ly)
 
             agora = time.perf_counter()
             hk = estado.config["hotkeys"]
             usar_mira_360 = estado.config.get("usar_mira_automatica_360", True)
             usar_mira_teclado = usar_mira_360 and (not estado.rp2040_conectado) and (vader is None)
 
-            # --- 1. LANÇAMENTO TELEGUIADO IA (Respeita estritamente a hotkey configurada) ---
+            # --- 1. LANÇAMENTO TELEGUIADO IA ---
             tecla_lanc = hk.get("lancamento_ia", "5")
             press_lanc = tecla_foi_pressionada(tecla_lanc)
 
@@ -1280,7 +1310,7 @@ def thread_controle_execucao(estado: EstadoSistema):
                         dp = None
 
                 if dp:
-                    tempo_sec = max(0.090, min(0.350, dp["tempo_ms"] / 1000.0))
+                    tempo_sec = max(0.085, min(0.350, dp["tempo_ms"] / 1000.0))
                     aereo = dp.get("aereo", False)
                     tipo_p = dp.get("tipo_passe", "RASTEIRO")
                     dist_m = dp.get("dist_metros", 20.0)
@@ -1295,8 +1325,7 @@ def thread_controle_execucao(estado: EstadoSistema):
                             (0.022 + tempo_sec, directx_release, SCAN_W),
                             (0.030 + tempo_sec, directx_release, SCAN_E)
                         ]
-                        rp_btns = (1 << BTN_RT_DIGITAL) | (1 << BTN_Y)
-                        executor.agendar_sequencia(etapas, tempo_sec + 0.030, vetor_dir, usar_mira_teclado, rp_btns)
+                        executor.agendar_sequencia(etapas, tempo_sec + 0.030, vetor_dir, usar_mira_teclado)
                     elif tipo_p == "CAVADO_ARCO" or aereo:
                         print(f"\n[DISPARO] 🎯 Lançamento CAVADO EM ARCO (LB+W): Dist={dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms")
                         etapas = [
@@ -1305,16 +1334,14 @@ def thread_controle_execucao(estado: EstadoSistema):
                             (0.020 + tempo_sec, directx_release, SCAN_W),
                             (0.028 + tempo_sec, directx_release, SCAN_Q)
                         ]
-                        rp_btns = (1 << BTN_LB) | (1 << BTN_Y)
-                        executor.agendar_sequencia(etapas, tempo_sec + 0.028, vetor_dir, usar_mira_teclado, rp_btns)
+                        executor.agendar_sequencia(etapas, tempo_sec + 0.028, vetor_dir, usar_mira_teclado)
                     else:
                         print(f"\n[DISPARO] 🎯 Lançamento RASTEIRO IA (W): Dist={dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms")
                         etapas = [
                             (0.000, directx_press, SCAN_W),
                             (tempo_sec, directx_release, SCAN_W)
                         ]
-                        rp_btns = (1 << BTN_Y)
-                        executor.agendar_sequencia(etapas, tempo_sec, vetor_dir, usar_mira_teclado, rp_btns)
+                        executor.agendar_sequencia(etapas, tempo_sec, vetor_dir, usar_mira_teclado)
                 else:
                     dir_frente = 1.0 if estado.atacando_direita else -1.0
                     alvo_aprox = (130 + int(38 * dir_frente), 65)
@@ -1329,7 +1356,7 @@ def thread_controle_execucao(estado: EstadoSistema):
                         (0.000, directx_press, SCAN_W),
                         (0.165, directx_release, SCAN_W)
                     ]
-                    executor.agendar_sequencia(etapas, 0.165, None, False, 1 << BTN_Y)
+                    executor.agendar_sequencia(etapas, 0.165, None, False)
 
             ant_lanc = press_lanc
 
@@ -1361,7 +1388,7 @@ def thread_controle_execucao(estado: EstadoSistema):
                             (0.075, directx_press, SCAN_D),
                             (0.075 + t2, directx_release, SCAN_D)
                         ]
-                        executor.agendar_sequencia(etapas, 0.075 + t2, vetor_dir, usar_mira_teclado, 1 << BTN_B)
+                        executor.agendar_sequencia(etapas, 0.075 + t2, vetor_dir, usar_mira_teclado)
                     elif tipo in ("BALAO_ALTO", "ANTECIPADO"):
                         etapas = [
                             (0.000, directx_press, SCAN_Q),
@@ -1369,8 +1396,7 @@ def thread_controle_execucao(estado: EstadoSistema):
                             (0.020 + tempo_sec, directx_release, SCAN_D),
                             (0.028 + tempo_sec, directx_release, SCAN_Q)
                         ]
-                        rp_btns = (1 << BTN_LB) | (1 << BTN_B)
-                        executor.agendar_sequencia(etapas, tempo_sec + 0.028, vetor_dir, usar_mira_teclado, rp_btns)
+                        executor.agendar_sequencia(etapas, tempo_sec + 0.028, vetor_dir, usar_mira_teclado)
                     elif tipo == "FENOMENAL":
                         etapas = [
                             (0.000, directx_press, SCAN_E),
@@ -1378,21 +1404,20 @@ def thread_controle_execucao(estado: EstadoSistema):
                             (0.025 + tempo_sec, directx_release, SCAN_D),
                             (0.032 + tempo_sec, directx_release, SCAN_E)
                         ]
-                        rp_btns = (1 << BTN_RT_DIGITAL) | (1 << BTN_B)
-                        executor.agendar_sequencia(etapas, tempo_sec + 0.032, vetor_dir, usar_mira_teclado, rp_btns)
+                        executor.agendar_sequencia(etapas, tempo_sec + 0.032, vetor_dir, usar_mira_teclado)
                     else:
                         etapas = [
                             (0.000, directx_press, SCAN_D),
                             (tempo_sec, directx_release, SCAN_D)
                         ]
-                        executor.agendar_sequencia(etapas, tempo_sec, vetor_dir, usar_mira_teclado, 1 << BTN_B)
+                        executor.agendar_sequencia(etapas, tempo_sec, vetor_dir, usar_mira_teclado)
                 else:
                     print("\n[DISPARO] ⚡ Cruzamento Manual (Sem alvo na área) -> D (170ms)")
                     etapas = [
                         (0.000, directx_press, SCAN_D),
                         (0.170, directx_release, SCAN_D)
                     ]
-                    executor.agendar_sequencia(etapas, 0.170, None, False, 1 << BTN_B)
+                    executor.agendar_sequencia(etapas, 0.170, None, False)
 
             ant_cruz = press_cruz
 
@@ -1460,7 +1485,6 @@ def thread_visao_radar(estado: EstadoSistema):
             if pos_bola is not None:
                 bola_ant = pos_bola
 
-            # Detecção de Time Estável (Histerese de 10 frames validada com proximidade da bola)
             modo = estado.config.get("modo_cor_time", "AUTO")
             if modo == "VERDE":
                 estado.sou_time_verde = True
@@ -1481,11 +1505,9 @@ def thread_visao_radar(estado: EstadoSistema):
                         if votos_verm >= 10:
                             estado.sou_time_verde = False
 
-            # Cópia explícita para nunca mutar as listas originais
             meus_jogadores = list(verdes if estado.sou_time_verde else vermelhos)
             adversarios = list(vermelhos if estado.sou_time_verde else verdes)
 
-            # Detecção da Direção do Ataque com base nos jogadores mais recuados (Goleiros)
             atacando_direita = estado.atacando_direita
             if len(meus_jogadores) >= 5 and len(adversarios) >= 5:
                 media_meu_x = np.mean([p[0] for p in meus_jogadores])
@@ -1494,7 +1516,6 @@ def thread_visao_radar(estado: EstadoSistema):
                     atacando_direita = (media_meu_x < media_adv_x)
             estado.atacando_direita = atacando_direita
 
-            # Linha de Impedimento Oficial IFAB com compensação de goleiro
             linha_x = processador.calcular_linha_impedimento_ifab(adversarios, atacando_direita=atacando_direita)
 
             altura_r, largura_r = img_bgr.shape[:2]
@@ -1513,9 +1534,7 @@ def thread_visao_radar(estado: EstadoSistema):
             melhor_cruz = None
 
             if len(meus_jogadores) >= 2:
-                # Identifica o portador da bola combinando pos_bola e cursor_usuario
                 if pos_bola is not None and cursor_usuario is not None:
-                    # Prioriza o jogador próximo do cursor se a bola também estiver perto
                     meus_jogadores.sort(key=lambda p: math.hypot(p[0] - cursor_usuario[0], p[1] - cursor_usuario[1]) * 0.7 + math.hypot(p[0] - pos_bola[0], p[1] - pos_bola[1]) * 0.3)
                 elif cursor_usuario is not None:
                     meus_jogadores.sort(key=lambda p: math.hypot(p[0] - cursor_usuario[0], p[1] - cursor_usuario[1]))
@@ -1523,10 +1542,12 @@ def thread_visao_radar(estado: EstadoSistema):
                     meus_jogadores.sort(key=lambda p: math.hypot(p[0] - pos_bola[0], p[1] - pos_bola[1]))
 
                 portador = meus_jogadores[0]
-                companheiros = meus_jogadores[1:]  # Slice seguro por índice (evita falha de igualdade de tuplas)
+                companheiros = meus_jogadores[1:]
 
-                analog_dir = estado.analog_dir
-                modo_desafogo = estado.config.get("modo_desafogo_pressao", True)
+                with estado.lock:
+                    analog_dir = estado.analog_dir
+                    modo_desafogo = estado.config.get("modo_desafogo_pressao", True)
+
                 livres, bloqueados = processador.analisar_linhas_de_passe(
                     portador, companheiros, adversarios,
                     atacando_direita=atacando_direita, linha_zaga=linha_x,
@@ -1617,7 +1638,7 @@ class InterfaceMestre:
     def __init__(self, estado: EstadoSistema):
         self.estado = estado
         self.root = tk.Tk()
-        self.root.title("⚽ eFootball Master AI & Controller Hub (V2)")
+        self.root.title("⚽ eFootball Master AI & Controller Hub (V2.1)")
         self.root.geometry("600x540")
         self.root.configure(bg="#0c0c14")
         self.root.resizable(False, False)
@@ -1657,11 +1678,11 @@ class InterfaceMestre:
         topo = tk.Frame(self.root, bg="#121220", pady=8)
         topo.pack(fill="x")
         tk.Label(
-            topo, text="⚡ EFOOTBALL MASTER AI & CONTROLLER HUB V2",
+            topo, text="⚡ EFOOTBALL MASTER AI & CONTROLLER HUB V2.1",
             font=("Segoe UI", 12, "bold"), fg="#00ffcc", bg="#121220"
         ).pack()
         tk.Label(
-            topo, text="Mira Vetorial 360° + Máquina Assíncrona 500Hz + Escala IFAB 105x68m",
+            topo, text="Mira Vetorial 360° + Máquina Bit-a-Bit 1000Hz + Escala IFAB 105x68m",
             font=("Segoe UI", 8), fg="#8888aa", bg="#121220"
         ).pack()
 
@@ -1757,13 +1778,13 @@ class InterfaceMestre:
             self.botoes_teclas[chave] = btn
 
         frame_info = tk.LabelFrame(
-            self.tab_visao, text=" Motor Tático V2 ",
+            self.tab_visao, text=" Motor Tático V2.1 ",
             bg="#0c0c14", fg="#8888aa", font=("Segoe UI", 8, "bold"), padx=10, pady=4
         )
         frame_info.pack(fill="x", padx=10, pady=4)
         tk.Label(
             frame_info,
-            text="• Escala anisotrópica real (105m x 68m) e rastreamento global sem roubo de IDs.\n• Máquina de estados não-bloqueante: o controle nunca congela durante o carregamento da barra.",
+            text="• Bhaskara de 2 estágios com recálculo por modalidade + Desaglutinação Distance Transform.\n• Máquina de estados bit-a-bit: suporta duplo toque rápido (D+D) tanto no DirectX quanto no RP2040.",
             bg="#0c0c14", fg="#777799", font=("Segoe UI", 8), justify="left"
         ).pack(anchor="w")
 
@@ -1808,8 +1829,8 @@ class InterfaceMestre:
         self.tree.column("hora", width=70, anchor="center")
         self.tree.column("dist", width=85, anchor="center")
         self.tree.column("barra", width=75, anchor="center")
-        self.tree.column("tipo", width=70, anchor="center")
-        self.tree.column("status", width=145, anchor="center")
+        self.tree.column("tipo", width=95, anchor="center")
+        self.tree.column("status", width=130, anchor="center")
 
         scroll = ttk.Scrollbar(frame_tabela, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -1956,7 +1977,13 @@ class InterfaceMestre:
             for p in historico:
                 st = p["status"]
                 tag = "concluido" if "CONCLUÍDO" in st else ("interceptado" if "INTERCEPTADO" in st else ("em_voo" if "EM_VOO" in st else "fora"))
-                tipo_str = "Aéreo (Cavado)" if p.get("aereo") else "Rasteiro"
+                tp = p.get("tipo_passe", "RASTEIRO")
+                if tp == "FENOMENAL_CURVA":
+                    tipo_str = "Fenomenal (RT)"
+                elif p.get("aereo") or tp == "CAVADO_ARCO":
+                    tipo_str = "Aéreo (Cavado)"
+                else:
+                    tipo_str = "Rasteiro"
                 self.tree.insert("", "end", values=(
                     p["id"],
                     p["hora"],
@@ -1982,12 +2009,10 @@ class InterfaceMestre:
 # ==============================================================================
 if __name__ == "__main__":
     print("=" * 65)
-    print("   ⚽ EFOOTBALL MASTER AI & CONTROLLER HUB - V2 REFATORADO")
-    print("   Mira 360° + Máquina Não-Bloqueante + Escala IFAB 105x68m")
+    print("   ⚽ EFOOTBALL MASTER AI & CONTROLLER HUB - V2.1 BLINDADO")
+    print("   Mira 360° + Máquina Bit-a-Bit 1000Hz + Escala IFAB 105x68m")
     print("=" * 65)
 
-    # Ativa resolução de timer de 1ms no Windows (necessário para ~1000Hz reais)
-    # Sem isso, time.sleep(0.001) pode variar entre 1ms e 15.6ms no Windows 10/11
     ctypes.windll.winmm.timeBeginPeriod(1)
     print("[TIMER] Resolução de timer Windows definida para 1ms (~1000Hz)")
 
@@ -2003,6 +2028,5 @@ if __name__ == "__main__":
         gui = InterfaceMestre(estado_mestre)
         gui.iniciar()
     finally:
-        # Restaura resolução padrão do timer ao encerrar (boa prática no Windows)
         ctypes.windll.winmm.timeEndPeriod(1)
         print("[TIMER] Resolução de timer restaurada.")

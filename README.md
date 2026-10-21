@@ -1,45 +1,37 @@
-# ⚽ eFootball Tactical AI & Controller Hub
+# ⚽ eFootball Tactical AI & Controller Hub (V2.1)
 
-Sistema avançado de assistência tática em tempo real para **eFootball (PC)** combinando **Visão Computacional (OpenCV)**, **Modelagem Cinemática & Balística**, e integração de hardware de alta performance (**Flydigi Vader 4 Pro**).
+Sistema avançado de assistência tática em tempo real para **eFootball (PC)** combinando **Visão Computacional a 60 FPS (MSS + OpenCV)**, **Modelagem Cinemática & Balística Anisotrópica ($105\text{m} \times 68\text{m}$)**, e integração de hardware de ultra-baixa latência (**Flydigi Vader 4 Pro + RP2040 Bridge a 1000Hz**).
 
 ---
 
-## 🌟 Principais Funcionalidades
+## 🌟 Principais Funcionalidades (V2.1)
 
-### 1. 🎯 Lançamento em Profundidade Teleguiado (Y / W)
-- **Rastreamento Cinemático com Filtro EMA ($\alpha=0.65$)**: Mede o vetor de velocidade real $\vec{v} = (\Delta x / \Delta t, \Delta y / \Delta t)$ de cada companheiro em sprint, convertendo em km/h no HUD.
-- **Interceptação Quadrática (Bhaskara)**: Resolve analiticamente a equação de encontro da bola com o atleta:
-  $$A(t^*)^2 + B t^* + C = 0$$
-  Antecipa corridas em diagonal (**facão**) e sprints pela ponta, mirando onde o jogador **vai estar**.
+### 1. 🎯 Lançamento em Profundidade Teleguiado 360° (`Y` / `W`)
+- **Escala Anisotrópica Oficial FIFA/IFAB ($105\text{m} \times 68\text{m}$)**: Converte independentemente os eixos horizontal e vertical do radar para metros reais, eliminando distorções angulares em viradas de jogo e passes diagonais.
+- **Rastreamento Cinemático Global ($\alpha=0.60$) & Desaglutinação por Distance Transform**:
+  - Associação global por menor distância preditiva (*Global Nearest Neighbor*), impedindo que jogadores que se cruzam troquem de ID.
+  - Subdivisão morfológica com `cv2.distanceTransform` para isolar de 2 a 6 atletas aglutinados na pequena área em escanteios.
+- **Interceptação Quadrática de Bhaskara em 2 Estágios**:
+  - Resolve analiticamente $A(t^*)^2 + B t^* + C = 0$ usando a velocidade específica da modalidade escolhida (`RASTEIRO`, `CAVADO_ARCO` ou `FENOMENAL_CURVA`), garantindo que o vetor direcional 360° aponte exatamente para o ponto futuro de encontro.
 - **Curva Balística Não Linear com Atrito do Gramado**:
-  $$\text{dist\_norm} = \text{clamp}\left(\frac{\text{dist\_metros} - 6.0}{52.0 - 6.0}, 0.0, 1.0\right)$$
-  $$\text{forca\_barra} = 0.20 + 0.76 \times (\text{dist\_norm})^{0.86}$$
-  $$\text{tempo\_ms} = \text{int}(95.0 + \text{forca\_barra} \times 250.0)$$
-  Elimina passes curtos fracos que morrem no caminho e evita que bolas longas estourem para fora.
-- **Filtro Anti-Impedimento Dinâmico (Regra Oficial IFAB)**:
-  - Localiza a linha do penúltimo defensor adversário.
-  - Penaliza severamente jogadores adiantados (`-60.0` no score tático, alerta vermelho `[IMPEDIDO!]`).
-  - Bonifica com pontuação máxima o atacante que parte de trás em posição legal e rompe a zaga (`+35.0`, destaque dourado `★ FACÃO`).
-- **Cone Dinâmico & Seletor Rasteiro vs. Aéreo**:
-  - Alargamento dinâmico da margem de bloqueio conforme a distância do defensor.
-  - Alternância automática para passe cavado por cima (**LB + Y**) quando há zagueiro bloqueando a linha rasteira.
+  $$\text{dist\_norm} = \text{clamp}\left(\frac{\text{dist\_metros} - 5.0}{58.0 - 5.0}, 0.0, 1.0\right)$$
+  $$\text{forca\_barra} = 0.18 + 0.78 \times (\text{dist\_norm})^{0.85}$$
+  $$\text{tempo\_ms} = \text{int}(90.0 + \text{forca\_barra} \times 255.0)$$
+- **Ponderação de Alinhamento Corporal (Contra-Pé) & Modo Desafogo Rápido**:
+  - Memoriza a última orientação corporal do portador da bola, bonificando passes a favor do movimento (`+15.0`) e penalizando giros cegos de 180° (`-20.0`).
+  - **Quick-Release (< 1.9m)**: Quando pressionado de perto por um marcador, cancela animações longas (`RT`) e reduz o tempo de barra do passe rasteiro em 18% para soltar a bola antes do desarme.
+- **Filtro Anti-Impedimento Oficial IFAB (Lei 11)**:
+  - Respeita a linha de meio-campo e compensa automaticamente a oclusão do goleiro sobre a linha de fundo do radar.
 
 ### 2. ⚡ Central Inteligente de Cruzamentos (1ª Trave, 2ª Trave, Meia-Lua)
-- Analisa a movimentação dos atacantes e o posicionamento dos zagueiros:
-  - **RASTEIRO (D + D duplo toque veloz)**: Atacante colado à pequena área ou entrada da área sem bloqueio na trajetória.
-  - **CABEÇA / PEITO (D com parábola)**: Bola colocada no tempo certo para finalização aérea na 1ª ou 2ª trave.
-  - **BALÃO ALTO (LB + D / Q + D)**: Encobre a cabeça da zaga no segundo pau quando há zagueiro cortando a trajetória.
-  - **ANTECIPADO (LB + D)**: Cruzamento antes da linha de fundo nas costas dos laterais.
-  - **FENOMENAL (RT + D / Barra Roxa)**: Cruzamento tenso e rápido de longa distância (> 44m) em campo aberto.
-- **Monitoramento Defensivo 360° dos Zagueiros**:
-  - Distância de marcação individual de cada recebedor. Se a 1ª trave estiver marcada (< 3.8m), a IA vira automaticamente para a 2ª trave livre.
-  - Bloqueio frontal no cruzador: anula cruzamento rasteiro para a bola não bater na canela da zaga.
-  - Bloqueio de trajetória: força cruzamento por cobertura (`LB + D`).
+- Analisa a movimentação dos atacantes na área e o posicionamento dos zagueiros:
+  - **RASTEIRO (`D + D` duplo toque sincronizado)**: Atacante livre próximo à pequena área ou infiltrando na meia-lua.
+  - **CABEÇA / PEITO (`D` com parábola)**: Bola colocada na 1ª ou 2ª trave.
+  - **BALÃO ALTO / ANTECIPADO (`LB + D` / `Q + D`)**: Encobre o primeiro zagueiro quando o corredor rasteiro está bloqueado.
+  - **FENOMENAL (`RT + D` / `E + D`)**: Cruzamento tenso e rápido de longa distância (> 34m) sem bloqueio frontal.
 
-### 3. 🛡️ Segurança Competitiva e Mapeamento Limpo
-- **Zero conflito de teclas nativas**: Hotkeys configuradas nas teclas neutras `5` e `6`, que o eFootball não utiliza, evitando qualquer ativação acidental de corrida nativa.
-- **Detecção com Borda de Subida (Edge Trigger) & Anti-Stuck**: Leitura em nível de kernel via `GetAsyncKeyState`, garantindo que teclas nunca fiquem presas.
-- **Suporte Total a Mandante e Visitante**: Regra IFAB oficial simétrica com tecla `F10` para alternar e salvar o time (Verde / Vermelho).
+### 3. ⚙️ Máquina de Estados Não-Bloqueante a 1000Hz (`timeBeginPeriod(1)`)
+- **Zero Freeze do Controle**: Nenhuma ação usa `time.sleep` bloqueante na thread de input. Todos os eventos de teclado DirectX (`SendInput` 64-bit) e bits da ponte serial RP2040 são chaveados bit-a-bit por timestamps de alta precisão (`time.perf_counter()`).
 
 ---
 
@@ -47,52 +39,34 @@ Sistema avançado de assistência tática em tempo real para **eFootball (PC)** 
 
 | Comando | Controle (Flydigi Vader 4 Pro) | Teclado | Ação Realizada |
 | :--- | :--- | :--- | :--- |
-| **Lançamento IA** | Botão **Z** | Tecla `5` | Lançamento balístico teleguiado (Rasteiro, Cavado em arco LB+Y ou Trivela RT+Y) |
-| **Cruzamento IA** | Botão **C** | Tecla `6` | Seleciona automaticamente o melhor setor (1ª/2ª trave) e o tipo ideal de cruzamento |
-| **Inverter Time** | Teclado / Macro | Tecla `F10` | Alterna entre Mandante (Verde) e Visitante (Vermelho) com salvamento automático |
-| **Desarme / Bote** | Botão **B** | Padrão do jogo | Ação defensiva normal do usuário sem interferência |
+| **Lançamento IA** | Botão **Z** | Tecla `5` | Lançamento balístico teleguiado 360° (`W`, `LB+W` ou `RT+W`) |
+| **Cruzamento IA** | Botão **C** | Tecla `6` | Cruzamento tático setorial 1ª/2ª trave (`D`, `D+D`, `LB+D` ou `RT+D`) |
+| **Inverter Time** | Teclado / Macro | Tecla `F10` | Alterna entre Mandante (Verde) e Visitante (Vermelho) e salva no JSON |
 
 ---
 
 ## 🚀 Instalação e Execução
 
-### Requisitos:
-- Python 3.10+ (Windows 10/11)
-- eFootball (PC / Steam) configurado em **1080p (Janela em Tela Cheia)**
-- Cores do radar no jogo: **Mandante = Verde**, **Visitante = Vermelho**
-
-### Passo a Passo:
-1. Clone o repositório:
-   ```powershell
-   git clone https://github.com/claitondossp-create/efootball-controle.git
-   cd efootball-controle
-   ```
-
-2. Instale as dependências:
+1. Instale as dependências:
    ```powershell
    pip install -r requirements.txt
    ```
 
-3. Execute a central de IA unificada:
+2. Execute a central unificada:
    ```powershell
    python efootball_mestre.py
    ```
 
-4. Uma janela OpenCV com zoom 3x do radar exibirá o rastreamento tático, linha de impedimento e alvos em tempo real. Pressione `Q` ou `ESC` para encerrar.
+3. Uma janela OpenCV com zoom 3x do radar exibirá o rastreamento tático, linha de impedimento e alvos em tempo real. Pressione `Q` ou `ESC` para encerrar.
 
 ---
 
 ## 📁 Estrutura do Repositório
 
 ```text
-├── efootball_mestre.py    # Sistema completo: Visão Computacional, IA balística, injeção DirectX e RP2040
+├── efootball_mestre.py    # Sistema completo V2.1: Visão Computacional, IA balística, injeção DirectX e RP2040
 ├── config_visao.json      # Configurações de ROI do radar, hotkeys e time
 ├── firmware/              # Firmware CircuitPython UF2 para Raspberry Pi Pico RP2040 (1000Hz)
 ├── requirements.txt       # Dependências Python
 └── README.md              # Documentação completa
 ```
-
----
-
-## ⚖️ Licença e Uso
-Desenvolvido para fins de pesquisa, estudo de Visão Computacional aplicada a jogos e engenharia de periféricos de entrada.
