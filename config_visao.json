@@ -11,5 +11,6 @@
         "inverter_cor_time": "f10"
     },
     "modo_cor_time": "AUTO",
-    "usar_mira_automatica_360": true
+    "usar_mira_automatica_360": true,
+    "modo_desafogo_pressao": true
 }
