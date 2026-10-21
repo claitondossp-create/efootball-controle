@@ -1,18 +1,21 @@
 """
 ================================================================================
-   EFOOTBALL MASTER AI & CONTROLLER HUB - ALL-IN-ONE (VERSÃO V2.1 BLINDADA)
+   EFOOTBALL MASTER AI & CONTROLLER HUB - ALL-IN-ONE (VERSÃO V2.2 xG)
 ================================================================================
 Projeto Unificado de Assistência Tática em Tempo Real para eFootball (PC).
 Compatível com versões MICROSOFT STORE / XBOX APP e STEAM.
 
-Destaques da V2.1:
+Destaques da V2.2:
+- Motor Tático de Finalização Inteligente Baseado em Expected Goals (xG Logístico)
+- Mira 360° no Canto Descoberto (Contra-Pé do Goleiro)
+- Seleção Dinâmica: Cavadinha (LB+X), Colocado (RB+X), Fenomenal (RT+X), Rasteiro (X)
+- Calibração de Barra Balística com Hard Cap de 265ms (Anti-Isolada por cima do gol)
 - Mira Automática 360° Real (Injeção vetorial no RP2040 e 8-Way no DirectX)
 - Máquina de Estados Não-Bloqueante com Sincronia Bit-a-Bit (Suporta Duplo Toque D+D no RP2040)
 - Escala Anisotrópica Oficial FIFA/IFAB (105m x 68m)
 - Rastreamento Cinemático Global + Desaglutinação por Transformada de Distância (Escanteios)
-- Equação de Bhaskara de 2 Estágios (Recalcula interceptação conforme velocidade do tipo de passe)
-- Memória de Orientação Corporal (Contra-Pé preciso mesmo com jogador parado)
-- Modo Desafogo Direcional Rápido (Quick-Release contra botes frontais < 1.9m)
+- Equação de Bhaskara de 2 Estágios (Recalcula interceptação conforme velocidade do passe)
+- Memória de Orientação Corporal (Contra-Pé) + Modo Desafogo Direcional Rápido
 - Regra de Impedimento IFAB Completa (Meio-Campo + Compensação de Goleiro Ocluso)
 ================================================================================
 """
@@ -207,13 +210,15 @@ RADAR_ROI_PADRAO = {
 DEFAULT_CONFIG = {
     "radar_roi": RADAR_ROI_PADRAO,
     "hotkeys": {
+        "chute_ia":          "4",
         "lancamento_ia":     "5",
         "cruzamento_ia":     "6",
         "inverter_cor_time": "f10"
     },
     "modo_cor_time": "AUTO",
     "usar_mira_automatica_360": True,
-    "modo_desafogo_pressao": True
+    "modo_desafogo_pressao": True,
+    "usar_finalizacao_inteligente": True
 }
 
 # Dimensões oficiais do gramado IFAB/eFootball em metros
@@ -868,6 +873,143 @@ class RadarPassesEFootball:
         candidatos_cruz.sort(key=lambda x: x["score"], reverse=True)
         return candidatos_cruz[0] if candidatos_cruz else None
 
+    def analisar_finalizacao_xg(self, portador, companheiros, adversarios, atacando_direita=True):
+        """
+        Motor Tático de Finalização Inteligente Baseado em Expected Goals (xG).
+        - Mira 360° no Canto Descoberto (Contra-Pé do Goleiro)
+        - Seleção Automática de Chute: Cavadinha (LB+X), Colocado (RB+X), Fenomenal (RT+X), Rasteiro Forte (X)
+        - Curva de Tempo de Barra Anti-Isolada (Hard Cap 265ms)
+        """
+        if portador is None:
+            return None
+
+        largura_campo = self.roi["width"]
+        altura_campo = self.roi["height"]
+        centro_y = altura_campo / 2.0
+        meio_campo_x = largura_campo / 2.0
+        gol_alvo_x = float(largura_campo) if atacando_direita else 0.0
+
+        dx_gol_m = (gol_alvo_x - portador[0]) * self.scale_x
+        dy_gol_m = (centro_y - portador[1]) * self.scale_y
+        dist_gol_m = math.hypot(dx_gol_m, dy_gol_m)
+
+        # Só finaliza se estiver no campo de ataque e a uma distância viável (<= 36 metros)
+        no_campo_ataque = (portador[0] >= meio_campo_x) if atacando_direita else (portador[0] <= meio_campo_x)
+        if not no_campo_ataque or dist_gol_m > 36.0 or dist_gol_m < 1.0:
+            return None
+
+        # 1. Identificação do Goleiro Adversário (defensor mais próximo da linha de fundo do gol alvo)
+        adv_ordenados = sorted(adversarios, key=lambda a: abs(gol_alvo_x - a[0])) if adversarios else []
+        goleiro = adv_ordenados[0] if adv_ordenados else None
+        dist_gk_linha_m = abs(gol_alvo_x - goleiro[0]) * self.scale_x if goleiro else 1.0
+        gk_y = goleiro[1] if goleiro else centro_y
+
+        # 2. Geometria da Baliza Oficial IFAB (7.32m de largura)
+        trave_metade_m = 3.66
+        offset_trave_px = trave_metade_m / self.scale_y
+        y_trave_sup = centro_y - offset_trave_px
+        y_trave_inf = centro_y + offset_trave_px
+
+        # Margem de segurança interna da trave (1.1m para garantir bola na rede sem beijar o poste)
+        margem_trave_px = 1.1 / self.scale_y
+        y_canto_sup = y_trave_sup + margem_trave_px
+        y_canto_inf = y_trave_inf - margem_trave_px
+
+        # 3. Mira no Canto Descoberto (Contra-Pé do Goleiro)
+        if gk_y <= centro_y:
+            # Goleiro cobrindo o setor superior -> bater no canto inferior
+            alvo_canto = (int(gol_alvo_x), int(round(y_canto_inf)))
+            canto_nome = "CANTO INFERIOR"
+        else:
+            # Goleiro cobrindo o setor inferior -> bater no canto superior
+            alvo_canto = (int(gol_alvo_x), int(round(y_canto_sup)))
+            canto_nome = "CANTO SUPERIOR"
+
+        dx_alvo_m = (alvo_canto[0] - portador[0]) * self.scale_x
+        dy_alvo_m = (alvo_canto[1] - portador[1]) * self.scale_y
+        dist_alvo_m = math.hypot(dx_alvo_m, dy_alvo_m)
+        vetor_mira = (dx_alvo_m / (dist_alvo_m + 1e-5), dy_alvo_m / (dist_alvo_m + 1e-5))
+
+        # 4. Ângulo de Visão da Baliza theta (radianos)
+        ang1 = math.atan2((y_trave_sup - portador[1]) * self.scale_y, (gol_alvo_x - portador[0]) * self.scale_x)
+        ang2 = math.atan2((y_trave_inf - portador[1]) * self.scale_y, (gol_alvo_x - portador[0]) * self.scale_x)
+        theta = abs(ang2 - ang1)
+        if theta > math.pi:
+            theta = 2.0 * math.pi - theta
+
+        # 5. Avaliação do Cone de Bloqueio (Zagueiros na linha de chute)
+        n_bloqueadores = 0
+        bloqueio_critico = False
+        ang_tiro = math.atan2(dy_alvo_m, dx_alvo_m)
+
+        for adv in adversarios:
+            if goleiro and adv == goleiro:
+                continue
+            dx_adv_m = (adv[0] - portador[0]) * self.scale_x
+            dy_adv_m = (adv[1] - portador[1]) * self.scale_y
+            proj_m = (dx_adv_m * dx_alvo_m + dy_adv_m * dy_alvo_m) / (dist_alvo_m + 1e-5)
+            if 0.6 < proj_m < dist_alvo_m:
+                perp_m = abs(dx_adv_m * math.sin(ang_tiro) - dy_adv_m * math.cos(ang_tiro))
+                if perp_m < 1.85:
+                    n_bloqueadores += 1
+                    if proj_m < 3.0:
+                        bloqueio_critico = True
+
+        # 6. Espaço Livre Imediato do Atleta (para armar o chute Fenomenal/Stunner)
+        espaco_livre_frente_m = min([self.dist_metros(portador, a) for a in adversarios], default=99.0)
+
+        # 7. Cálculo Logístico de Expected Goals (xG)
+        delta_gk = max(0.0, min(5.0, dist_gk_linha_m - 2.0))
+        z = 2.45 * theta - 0.082 * dist_gol_m - 0.40 * n_bloqueadores + 0.90 * (delta_gk / 3.0) - 0.25
+        xg_percent = (1.0 / (1.0 + math.exp(-max(-6.0, min(6.0, z))))) * 100.0
+
+        # 8. Árvore de Decisão de Tipo de Finalização & Duração de Barra Calibrada
+        # Cavadinha (Chip Shot - LB+X) quando o goleiro sai da linha (>= 3.8m)
+        if dist_gk_linha_m >= 3.8 and 6.0 <= dist_gol_m <= 22.0:
+            tipo_chute = "CAVADA"
+            tag_hud = "CAVADINHA (LB+X)"
+            modificador = SCAN_Q
+            duracao_ms = int(135.0 + ((dist_gol_m - 6.0) / 16.0) * 40.0)
+
+        # Chute Colocado / Finesse (RB+X) quando em diagonal (offset >= 3.5m)
+        elif abs(dy_gol_m) >= 3.5 and 12.0 <= dist_gol_m <= 24.0 and not bloqueio_critico:
+            tipo_chute = "COLOCADO"
+            tag_hud = "COLOCADO (RB+X)"
+            modificador = SCAN_C
+            duracao_ms = int(160.0 + ((dist_gol_m - 12.0) / 12.0) * 50.0)
+
+        # Chute Fenomenal / Stunner (RT+X) com espaço livre de frente (>= 2.4m) e média distância (20m - 32m)
+        elif espaco_livre_frente_m >= 2.4 and 20.0 <= dist_gol_m <= 32.0 and not bloqueio_critico:
+            tipo_chute = "FENOMENAL"
+            tag_hud = "FENOMENAL (RT+X)"
+            modificador = SCAN_E
+            duracao_ms = int(225.0 + ((dist_gol_m - 20.0) / 12.0) * 40.0)
+
+        # Chute Rasteiro Seco / Forte no Canto (X) para finalizações rápidas, cara a cara ou sob pressão
+        else:
+            tipo_chute = "RASTEIRO"
+            tag_hud = "RASTEIRO FORTE (X)"
+            modificador = None
+            duracao_ms = int(110.0 + (min(dist_gol_m, 20.0) / 20.0) * 35.0)
+
+        # Trava de Segurança Máxima (Hard Cap de 265ms para nunca isolar por cima do travessão)
+        duracao_ms = max(100, min(265, duracao_ms))
+
+        return {
+            "origem": portador,
+            "alvo_canto": alvo_canto,
+            "canto_nome": canto_nome,
+            "vetor_direcao": vetor_mira,
+            "dist_gol_m": dist_gol_m,
+            "xg_percent": xg_percent,
+            "tipo_chute": tipo_chute,
+            "tag_hud": tag_hud,
+            "modificador": modificador,
+            "tempo_ms": duracao_ms,
+            "gk_pos": goleiro,
+            "dist_gk_linha_m": dist_gk_linha_m
+        }
+
 
 # ==============================================================================
 # 4. HOOK DE TECLADO E TELEMETRIA
@@ -1115,6 +1257,7 @@ class EstadoSistema:
         self.ultimo_passe_valido = None
         self.ultima_validade_ts = 0.0
         self.dados_cruzamento = None
+        self.dados_chute = None
         self.pos_bola = None
         self.cursor_usuario = None
         self.sou_time_verde = True
@@ -1140,6 +1283,8 @@ class EstadoSistema:
                         cfg["usar_mira_automatica_360"] = salvo["usar_mira_automatica_360"]
                     if "modo_desafogo_pressao" in salvo:
                         cfg["modo_desafogo_pressao"] = salvo["modo_desafogo_pressao"]
+                    if "usar_finalizacao_inteligente" in salvo:
+                        cfg["usar_finalizacao_inteligente"] = salvo["usar_finalizacao_inteligente"]
             except Exception:
                 pass
         return cfg
@@ -1269,6 +1414,8 @@ def thread_controle_execucao(estado: EstadoSistema):
 
     ant_lanc = False
     ant_cruz = False
+    ant_chute_key = False
+    ant_btn_x = False
 
     while estado.rodando:
         try:
@@ -1421,7 +1568,82 @@ def thread_controle_execucao(estado: EstadoSistema):
 
             ant_cruz = press_cruz
 
-            # --- 3. INVERTER TIME MANUALMENTE (F10) ---
+            # --- 3. FINALIZAÇÃO INTELIGENTE IA (xG & MIRA 360°) ---
+            usar_finalizacao = estado.config.get("usar_finalizacao_inteligente", True)
+            tecla_chute = hk.get("chute_ia", "4")
+            press_chute_key = tecla_foi_pressionada(tecla_chute)
+            press_btn_x = vader.get_button(BTN_X) if vader else False
+
+            with estado.lock:
+                tem_dados_chute = (estado.dados_chute is not None)
+
+            trigger_chute_key = press_chute_key and not ant_chute_key
+            trigger_chute_gp = press_btn_x and not ant_btn_x and usar_finalizacao and tem_dados_chute
+
+            if (trigger_chute_key or trigger_chute_gp) and (agora - ultimo_disparo > cooldown):
+                ultimo_disparo = agora
+                if trigger_chute_key:
+                    consumir_tecla(tecla_chute)
+
+                with estado.lock:
+                    dch = copy.deepcopy(estado.dados_chute) if estado.dados_chute else None
+
+                if dch:
+                    tempo_sec = max(0.090, min(0.265, dch["tempo_ms"] / 1000.0))
+                    vetor_dir = dch.get("vetor_direcao") if usar_mira_360 else None
+                    mod = dch.get("modificador")
+                    tag = dch.get("tag_hud", "CHUTE")
+                    xg = dch.get("xg_percent", 0.0)
+                    dist_m = dch.get("dist_gol_m", 0.0)
+                    canto = dch.get("canto_nome", "GOL")
+                    print(f"\n[CHUTE IA] ⚽ {tag} ({canto}) | xG={xg:.0f}% | Dist={dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms")
+
+                    if mod == SCAN_Q:
+                        # Cavadinha (LB + X)
+                        etapas = [
+                            (0.000, directx_press, SCAN_Q),
+                            (0.020, directx_press, SCAN_A),
+                            (0.020 + tempo_sec, directx_release, SCAN_A),
+                            (0.028 + tempo_sec, directx_release, SCAN_Q)
+                        ]
+                        executor.agendar_sequencia(etapas, tempo_sec + 0.028, vetor_dir, usar_mira_teclado)
+                    elif mod == SCAN_C:
+                        # Colocado / Finesse (RB + X)
+                        etapas = [
+                            (0.000, directx_press, SCAN_C),
+                            (0.020, directx_press, SCAN_A),
+                            (0.020 + tempo_sec, directx_release, SCAN_A),
+                            (0.028 + tempo_sec, directx_release, SCAN_C)
+                        ]
+                        executor.agendar_sequencia(etapas, tempo_sec + 0.028, vetor_dir, usar_mira_teclado)
+                    elif mod == SCAN_E:
+                        # Fenomenal / Stunner (RT + X)
+                        etapas = [
+                            (0.000, directx_press, SCAN_E),
+                            (0.025, directx_press, SCAN_A),
+                            (0.025 + tempo_sec, directx_release, SCAN_A),
+                            (0.032 + tempo_sec, directx_release, SCAN_E)
+                        ]
+                        executor.agendar_sequencia(etapas, tempo_sec + 0.032, vetor_dir, usar_mira_teclado)
+                    else:
+                        # Rasteiro Seco / Forte no Canto (X)
+                        etapas = [
+                            (0.000, directx_press, SCAN_A),
+                            (tempo_sec, directx_release, SCAN_A)
+                        ]
+                        executor.agendar_sequencia(etapas, tempo_sec, vetor_dir, usar_mira_teclado)
+                else:
+                    print("\n[CHUTE] ⚽ Chute Rápido (Sem mira xG ativa) -> A (135ms)")
+                    etapas = [
+                        (0.000, directx_press, SCAN_A),
+                        (0.135, directx_release, SCAN_A)
+                    ]
+                    executor.agendar_sequencia(etapas, 0.135, None, False)
+
+            ant_chute_key = press_chute_key
+            ant_btn_x = press_btn_x
+
+            # --- 4. INVERTER TIME MANUALMENTE (F10) ---
             tecla_inv = hk.get("inverter_cor_time", "f10")
             if tecla_foi_pressionada(tecla_inv):
                 consumir_tecla(tecla_inv)
@@ -1432,7 +1654,7 @@ def thread_controle_execucao(estado: EstadoSistema):
                     estado.salvar_config()
                     print(f"\n[TIME] Invertido manualmente e salvo: {novo_modo}")
 
-            # --- 4. ATUALIZA MÁQUINA DE ESTADOS E PASSTHROUGH RP2040 ---
+            # --- 5. ATUALIZA MÁQUINA DE ESTADOS E PASSTHROUGH RP2040 ---
             em_acao, ov_btns, ov_lx, ov_ly = executor.atualizar()
 
             if ser and ser.is_open:
@@ -1442,7 +1664,8 @@ def thread_controle_execucao(estado: EstadoSistema):
                         if vader.get_button(b):
                             buttons |= (1 << b)
                 if em_acao:
-                    buttons |= ov_btns
+                    mascara_ia = (1 << BTN_X) | (1 << BTN_Y) | (1 << BTN_B) | (1 << BTN_LB) | (1 << BTN_RB) | (1 << BTN_RT_DIGITAL)
+                    buttons = (buttons & ~mascara_ia) | ov_btns
                     out_lx = ov_lx if ov_lx is not None else lx
                     out_ly = ov_ly if ov_ly is not None else ly
                 else:
@@ -1587,6 +1810,19 @@ def thread_visao_radar(estado: EstadoSistema):
                     cv2.circle(overlay, df_c, 5, cor_cruz, -1)
                     cv2.putText(overlay, tag_c, (max(2, df_c[0] - 25), max(10, df_c[1] + 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.32, cor_cruz, 1)
 
+                melhor_chute = processador.analisar_finalizacao_xg(
+                    portador, companheiros, adversarios, atacando_direita=atacando_direita
+                )
+                if melhor_chute:
+                    alvo_k = melhor_chute["alvo_canto"]
+                    tag_k = melhor_chute["tag_hud"]
+                    xg_val = melhor_chute["xg_percent"]
+                    cor_k = (0, 255, 100) if xg_val >= 50 else ((0, 220, 255) if xg_val >= 30 else (0, 100, 255))
+                    cv2.line(overlay, portador, alvo_k, cor_k, 2, cv2.LINE_AA)
+                    cv2.circle(overlay, alvo_k, 4, cor_k, -1)
+                    txt_chute = f"xG:{xg_val:.0f}% {tag_k}"
+                    cv2.putText(overlay, txt_chute, (max(2, portador[0] - 25), max(12, portador[1] + 16)), cv2.FONT_HERSHEY_SIMPLEX, 0.32, cor_k, 1)
+
             if cursor_usuario is not None:
                 cv2.circle(overlay, cursor_usuario, 7, (0, 255, 255), 2)
             if pos_bola is not None:
@@ -1600,6 +1836,7 @@ def thread_visao_radar(estado: EstadoSistema):
                     estado.ultimo_passe_valido = melhor_passe
                     estado.ultima_validade_ts = agora_ts
                 estado.dados_cruzamento = melhor_cruz
+                estado.dados_chute = melhor_chute
                 estado.cursor_usuario = cursor_usuario
                 estado.pos_bola = pos_bola
 
@@ -1615,6 +1852,11 @@ def thread_visao_radar(estado: EstadoSistema):
                 txt_hud = f"ASSERTIVIDADE: {st_hud['taxa']:.0f}% ({st_hud['acertos']}/{st_hud['total']})"
                 cor_hud = (0, 255, 100) if st_hud['taxa'] >= 70 else ((0, 220, 255) if st_hud['taxa'] >= 50 else (0, 80, 255))
                 cv2.putText(hud_zoom, txt_hud, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.55, cor_hud, 2)
+
+            if melhor_chute:
+                txt_hud_chute = f"FINALIZACAO: xG {melhor_chute['xg_percent']:.0f}% | {melhor_chute['tag_hud']} ({melhor_chute['canto_nome']})"
+                cor_hud_chute = (0, 255, 100) if melhor_chute['xg_percent'] >= 50 else ((0, 220, 255) if melhor_chute['xg_percent'] >= 30 else (0, 120, 255))
+                cv2.putText(hud_zoom, txt_hud_chute, (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.50, cor_hud_chute, 2)
 
             cv2.imshow("eFootball Radar Tatico IA (60 FPS)", hud_zoom)
 
@@ -1638,8 +1880,8 @@ class InterfaceMestre:
     def __init__(self, estado: EstadoSistema):
         self.estado = estado
         self.root = tk.Tk()
-        self.root.title("⚽ eFootball Master AI & Controller Hub (V2.1)")
-        self.root.geometry("600x540")
+        self.root.title("⚽ eFootball Master AI & Controller Hub (V2.2 xG)")
+        self.root.geometry("600x575")
         self.root.configure(bg="#0c0c14")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.encerrar)
@@ -1750,6 +1992,15 @@ class InterfaceMestre:
         )
         cb_desafogo.pack(anchor="w", pady=2)
 
+        self.var_chute = tk.BooleanVar(value=self.estado.config.get("usar_finalizacao_inteligente", True))
+        cb_chute = tk.Checkbutton(
+            frame_time, text="Ativar Finalização Inteligente xG (Gatilho X no Ataque / Tecla 4)",
+            variable=self.var_chute, command=self.mudar_finalizacao,
+            bg="#0c0c14", fg="#ffcc00", selectcolor="#1c1c30", activebackground="#0c0c14",
+            font=("Segoe UI", 9, "bold")
+        )
+        cb_chute.pack(anchor="w", pady=2)
+
         frame_keys = tk.LabelFrame(
             self.tab_visao, text=" Atalhos das Ações Táticas da IA (Flydigi Space Station) ",
             bg="#0c0c14", fg="#00ffcc", font=("Segoe UI", 9, "bold"), padx=10, pady=6
@@ -1758,6 +2009,7 @@ class InterfaceMestre:
 
         self.botoes_teclas = {}
         acoes = [
+            ("chute_ia", "⚽ Finalização Inteligente xG (X)", "A / LB+A / RB+A / RT+A"),
             ("lancamento_ia", "🎯 Lançamento Teleguiado IA (Y)", "W / LB+W / RT+W"),
             ("cruzamento_ia", "⚡ Cruzamento Inteligente IA (B)", "D / D+D / LB+D"),
         ]
@@ -1871,6 +2123,11 @@ class InterfaceMestre:
     def mudar_desafogo(self):
         with self.estado.lock:
             self.estado.config["modo_desafogo_pressao"] = bool(self.var_desafogo.get())
+            self.estado.salvar_config()
+
+    def mudar_finalizacao(self):
+        with self.estado.lock:
+            self.estado.config["usar_finalizacao_inteligente"] = bool(self.var_chute.get())
             self.estado.salvar_config()
 
     def capturar_tecla(self, chave):
@@ -2009,8 +2266,8 @@ class InterfaceMestre:
 # ==============================================================================
 if __name__ == "__main__":
     print("=" * 65)
-    print("   ⚽ EFOOTBALL MASTER AI & CONTROLLER HUB - V2.1 BLINDADO")
-    print("   Mira 360° + Máquina Bit-a-Bit 1000Hz + Escala IFAB 105x68m")
+    print("   ⚽ EFOOTBALL MASTER AI & CONTROLLER HUB - V2.2 (FINALIZAÇÃO xG)")
+    print("   Mira 360° no Canto + Barra Balística + Assistência Tática")
     print("=" * 65)
 
     ctypes.windll.winmm.timeBeginPeriod(1)

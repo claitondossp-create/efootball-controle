@@ -6,11 +6,13 @@
         "height": 130
     },
     "hotkeys": {
+        "chute_ia": "4",
         "lancamento_ia": "5",
         "cruzamento_ia": "6",
         "inverter_cor_time": "f10"
     },
     "modo_cor_time": "AUTO",
     "usar_mira_automatica_360": true,
-    "modo_desafogo_pressao": true
+    "modo_desafogo_pressao": true,
+    "usar_finalizacao_inteligente": true
 }
