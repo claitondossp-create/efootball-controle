@@ -1,0 +1,15 @@
+{
+    "radar_roi": {
+        "top": 890,
+        "left": 830,
+        "width": 260,
+        "height": 130
+    },
+    "hotkeys": {
+        "lancamento_ia": "5",
+        "cruzamento_ia": "6",
+        "inverter_cor_time": "f10"
+    },
+    "modo_cor_time": "AUTO",
+    "usar_mira_automatica_360": true
+}

@@ -24,17 +24,22 @@ Sistema avançado de assistência tática em tempo real para **eFootball (PC)** 
   - Alargamento dinâmico da margem de bloqueio conforme a distância do defensor.
   - Alternância automática para passe cavado por cima (**LB + Y**) quando há zagueiro bloqueando a linha rasteira.
 
-### 2. ⚡ Central Inteligente de Cruzamentos (RT + B)
-- Analisa a movimentação dos atacantes dentro e na entrada da grande área:
-  - **RASTEIRO (B + B duplo toque veloz)**: Atacante colado à pequena área para corte seco.
-  - **CABEÇA / PEITO (B com parábola)**: Bola colocada no tempo certo para finalização aérea.
-  - **FENOMENAL (RT + B / Barra Roxa)**: Cruzamento tenso e rápido de longa distância (> 36m).
+### 2. ⚡ Central Inteligente de Cruzamentos (1ª Trave, 2ª Trave, Meia-Lua)
+- Analisa a movimentação dos atacantes e o posicionamento dos zagueiros:
+  - **RASTEIRO (D + D duplo toque veloz)**: Atacante colado à pequena área ou entrada da área sem bloqueio na trajetória.
+  - **CABEÇA / PEITO (D com parábola)**: Bola colocada no tempo certo para finalização aérea na 1ª ou 2ª trave.
+  - **BALÃO ALTO (LB + D / Q + D)**: Encobre a cabeça da zaga no segundo pau quando há zagueiro cortando a trajetória.
+  - **ANTECIPADO (LB + D)**: Cruzamento antes da linha de fundo nas costas dos laterais.
+  - **FENOMENAL (RT + D / Barra Roxa)**: Cruzamento tenso e rápido de longa distância (> 44m) em campo aberto.
+- **Monitoramento Defensivo 360° dos Zagueiros**:
+  - Distância de marcação individual de cada recebedor. Se a 1ª trave estiver marcada (< 3.8m), a IA vira automaticamente para a 2ª trave livre.
+  - Bloqueio frontal no cruzador: anula cruzamento rasteiro para a bola não bater na canela da zaga.
+  - Bloqueio de trajetória: força cruzamento por cobertura (`LB + D`).
 
 ### 3. 🛡️ Segurança Competitiva e Mapeamento Limpo
-- **Zero interferência na defesa**: Botão B físico do controle mantido livre para botes e desarme manual.
-- **Zero auto-switching defensivo**: Nenhum cursor indesejado durante a marcação.
-- **Detecção com Borda de Subida (Edge Trigger)**: Dispara rigorosamente 1 única vez por acionamento.
-- **Zero latência de áudio**: Execução silenciosa e instantânea sem delays de som.
+- **Zero conflito de teclas nativas**: Hotkeys configuradas nas teclas neutras `5` e `6`, que o eFootball não utiliza, evitando qualquer ativação acidental de corrida nativa.
+- **Detecção com Borda de Subida (Edge Trigger) & Anti-Stuck**: Leitura em nível de kernel via `GetAsyncKeyState`, garantindo que teclas nunca fiquem presas.
+- **Suporte Total a Mandante e Visitante**: Regra IFAB oficial simétrica com tecla `F10` para alternar e salvar o time (Verde / Vermelho).
 
 ---
 
@@ -42,8 +47,9 @@ Sistema avançado de assistência tática em tempo real para **eFootball (PC)** 
 
 | Comando | Controle (Flydigi Vader 4 Pro) | Teclado | Ação Realizada |
 | :--- | :--- | :--- | :--- |
-| **Lançamento Y** | Botão **Z** ou Botão **Y** | `Espaço` / `Z` / `Numpad 5` | Lançamento com força balística calculada milimetricamente |
-| **Cruzamento IA** | Botão **C** | Tecla `C` / `Numpad 6` | Seleciona automaticamente Rasteiro, Cabeça ou Fenomenal |
+| **Lançamento IA** | Botão **Z** | Tecla `5` | Lançamento balístico teleguiado (Rasteiro, Cavado em arco LB+Y ou Trivela RT+Y) |
+| **Cruzamento IA** | Botão **C** | Tecla `6` | Seleciona automaticamente o melhor setor (1ª/2ª trave) e o tipo ideal de cruzamento |
+| **Inverter Time** | Teclado / Macro | Tecla `F10` | Alterna entre Mandante (Verde) e Visitante (Vermelho) com salvamento automático |
 | **Desarme / Bote** | Botão **B** | Padrão do jogo | Ação defensiva normal do usuário sem interferência |
 
 ---
@@ -67,9 +73,9 @@ Sistema avançado de assistência tática em tempo real para **eFootball (PC)** 
    pip install -r requirements.txt
    ```
 
-3. Execute a central de IA:
+3. Execute a central de IA unificada:
    ```powershell
-   python lancamento_automatico_y.py
+   python efootball_mestre.py
    ```
 
 4. Uma janela OpenCV com zoom 3x do radar exibirá o rastreamento tático, linha de impedimento e alvos em tempo real. Pressione `Q` ou `ESC` para encerrar.
@@ -79,13 +85,11 @@ Sistema avançado de assistência tática em tempo real para **eFootball (PC)** 
 ## 📁 Estrutura do Repositório
 
 ```text
-├── lancamento_automatico_y.py   # Script principal: interface Pygame, triggers e injeção
-├── visao_radar_passes.py         # Módulo OpenCV: rastreamento cinemático, Bhaskara e cone dinâmico
-├── firmware_bridge.py            # Ponte serial / RP2040 para automações em nível de hardware
-├── flydigi_re/                   # Scripts de engenharia reversa do protocolo Flydigi Vader 4 Pro
-├── firmware/                     # Firmware CircuitPython UF2
-├── requirements.txt              # Dependências Python
-└── README.md                     # Documentação completa
+├── efootball_mestre.py    # Sistema completo: Visão Computacional, IA balística, injeção DirectX e RP2040
+├── config_visao.json      # Configurações de ROI do radar, hotkeys e time
+├── firmware/              # Firmware CircuitPython UF2 para Raspberry Pi Pico RP2040 (1000Hz)
+├── requirements.txt       # Dependências Python
+└── README.md              # Documentação completa
 ```
 
 ---
