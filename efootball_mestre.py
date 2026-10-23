@@ -3121,7 +3121,7 @@ class InterfaceMestre:
         sw = self.root.winfo_screenwidth()
         pos_x = max(20, sw - 670)
         pos_y = 25
-        self.root.geometry(f"640x820+{pos_x}+{pos_y}")
+        self.root.geometry(f"660x830+{pos_x}+{pos_y}")
         self.root.configure(bg="#0c0c14")
         self.root.resizable(True, True)
         self.root.protocol("WM_DELETE_WINDOW", self.encerrar)
@@ -3210,73 +3210,73 @@ class InterfaceMestre:
             frame_time, text="Ativar Mira Direcional 100% IA (Pre-Aim 18ms + Follow-Through 65ms)",
             variable=self.var_mira360, command=self.mudar_mira360,
             bg="#0c0c14", fg="#00ff88", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8, "bold")
+            font=("Segoe UI", 8, "bold"), anchor="w"
         )
-        cb_mira.pack(anchor="w", pady=1)
+        cb_mira.pack(anchor="w", fill="x", pady=1)
         self.var_autofacao = tk.BooleanVar(value=self.estado.config.get("auto_disparo_facao", False))
         cb_autofacao = tk.Checkbutton(
             frame_time, text="Auto-Disparo de Lançamento em Facão Claro (IA passa sozinha na infiltração)",
             variable=self.var_autofacao, command=self.mudar_autofacao,
             bg="#0c0c14", fg="#ff77ff", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8, "bold")
+            font=("Segoe UI", 8, "bold"), anchor="w"
         )
-        cb_autofacao.pack(anchor="w", pady=1)
+        cb_autofacao.pack(anchor="w", fill="x", pady=1)
         self.var_rumble_facao = tk.BooleanVar(value=self.estado.config.get("rumble_alerta_facao", True))
         cb_rumble_facao = tk.Checkbutton(
             frame_time, text="Alerta Háptico Flydigi (Controle treme quando atacante faz o facão sobre a zaga)",
             variable=self.var_rumble_facao, command=self.mudar_rumble_facao,
             bg="#0c0c14", fg="#00ffcc", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8, "bold")
+            font=("Segoe UI", 8, "bold"), anchor="w"
         )
-        cb_rumble_facao.pack(anchor="w", pady=1)
+        cb_rumble_facao.pack(anchor="w", fill="x", pady=1)
         self.var_autoavanco = tk.BooleanVar(value=self.estado.config.get("auto_avanco_ataque", True))
         cb_autoavanco = tk.Checkbutton(
-            frame_time, text="Auto-Avanço de Companheiro no Ataque (Aciona Botão Z / Teammate Run automaticamente)",
+            frame_time, text="Auto-Avanço de Companheiro no Ataque (Botão Z IA)",
             variable=self.var_autoavanco, command=self.mudar_autoavanco,
             bg="#0c0c14", fg="#00e5ff", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8, "bold")
+            font=("Segoe UI", 8, "bold"), anchor="w"
         )
-        cb_autoavanco.pack(anchor="w", pady=1)
+        cb_autoavanco.pack(anchor="w", fill="x", pady=1)
         self.var_desafogo = tk.BooleanVar(value=self.estado.config.get("modo_desafogo_pressao", True))
         cb_desafogo = tk.Checkbutton(
             frame_time, text="Ativar Modo Desafogo Rápido (Quick-Release sob pressão < 1.9m)",
             variable=self.var_desafogo, command=self.mudar_desafogo,
             bg="#0c0c14", fg="#00ffcc", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8)
+            font=("Segoe UI", 8), anchor="w"
         )
-        cb_desafogo.pack(anchor="w", pady=1)
+        cb_desafogo.pack(anchor="w", fill="x", pady=1)
         self.var_chute = tk.BooleanVar(value=self.estado.config.get("usar_finalizacao_inteligente", True))
         cb_chute = tk.Checkbutton(
             frame_time, text="Ativar Finalização Inteligente xG (Gatilho X no Ataque / Tecla 4)",
             variable=self.var_chute, command=self.mudar_finalizacao,
             bg="#0c0c14", fg="#ffcc00", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8, "bold")
+            font=("Segoe UI", 8, "bold"), anchor="w"
         )
-        cb_chute.pack(anchor="w", pady=1)
+        cb_chute.pack(anchor="w", fill="x", pady=1)
         self.var_defesa = tk.BooleanVar(value=self.estado.config.get("usar_defesa_inteligente", True))
         cb_defesa = tk.Checkbutton(
             frame_time, text="Ativar Reposição Defensiva & Sombra Anti-Tabela 1-2 (Bhaskara Cover Shadow)",
             variable=self.var_defesa, command=self.mudar_defesa,
             bg="#0c0c14", fg="#00e5ff", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8, "bold")
+            font=("Segoe UI", 8, "bold"), anchor="w"
         )
-        cb_defesa.pack(anchor="w", pady=1)
+        cb_defesa.pack(anchor="w", fill="x", pady=1)
         self.var_autocontencao = tk.BooleanVar(value=self.estado.config.get("auto_contencao_tabela", True))
         cb_autocont = tk.Checkbutton(
             frame_time, text="Assistência Defensiva no Gatilho LT (Guia marcador para Sombra 1-2 / Funil Goal-Side)",
             variable=self.var_autocontencao, command=self.mudar_autocontencao,
             bg="#0c0c14", fg="#88ffff", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8)
+            font=("Segoe UI", 8), anchor="w"
         )
-        cb_autocont.pack(anchor="w", pady=1)
+        cb_autocont.pack(anchor="w", fill="x", pady=1)
         self.var_autocursor = tk.BooleanVar(value=self.estado.config.get("auto_cursor_antitabela", False))
         cb_autocur = tk.Checkbutton(
             frame_time, text="Troca de Cursor Preventiva Anti-Tabela (LB automático quando 1-2 rompe a zaga)",
             variable=self.var_autocursor, command=self.mudar_autocursor,
             bg="#0c0c14", fg="#ff99ff", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8)
+            font=("Segoe UI", 8), anchor="w"
         )
-        cb_autocur.pack(anchor="w", pady=1)
+        cb_autocur.pack(anchor="w", fill="x", pady=1)
         frame_perfil = tk.LabelFrame(
             self.tab_visao, text=" Perfil de Assistência do Jogo & Vetor Híbrido ",
             bg="#0c0c14", fg="#00ffcc", font=("Segoe UI", 9, "bold"), padx=10, pady=4
@@ -3306,17 +3306,17 @@ class InterfaceMestre:
             frame_hw, text="Ativar Feedback Háptico Vader 4 Pro (Pulsos táteis em xG Alto e Infiltrações)",
             variable=self.var_haptico, command=self.mudar_haptico,
             bg="#0c0c14", fg="#00ff88", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8)
+            font=("Segoe UI", 8), anchor="w"
         )
-        cb_hap.pack(anchor="w", pady=1)
+        cb_hap.pack(anchor="w", fill="x", pady=1)
         self.var_overlay = tk.BooleanVar(value=self.estado.config.get("overlay_ingame", True))
         cb_ovl = tk.Checkbutton(
             frame_hw, text="Exibir HUD Flutuante In-Game Transparente (F11 para Ligar/Desligar)",
             variable=self.var_overlay, command=self.mudar_overlay,
             bg="#0c0c14", fg="#00e5ff", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8)
+            font=("Segoe UI", 8), anchor="w"
         )
-        cb_ovl.pack(anchor="w", pady=1)
+        cb_ovl.pack(anchor="w", fill="x", pady=1)
         frame_keys = tk.LabelFrame(
             self.tab_visao, text=" Atalhos das Ações Táticas da IA (Flydigi Space Station) ",
             bg="#0c0c14", fg="#00ffcc", font=("Segoe UI", 9, "bold"), padx=10, pady=4
