@@ -246,11 +246,14 @@ class LeitorDiretoVader4Pro:
                         vid = d.get("vendor_id", 0)
                         pid = d.get("product_id", 0)
                         prod = (d.get("product_string") or "").lower()
-                        if vid in FLYDIGI_VIDS or "flydigi" in prod or "vader" in prod:
-                            # Prioriza interfaces vendor-defined (UsagePage >= 0xFF00 ou MI_02)
+                        if vid == 0x045E:
+                            continue
+                        if vid in FLYDIGI_VIDS or ("flydigi" in prod or "vader" in prod):
+                            # Prioriza interfaces vendor-defined (UsagePage >= 0xFF00)
                             up = d.get("usage_page", 0)
-                            score_if = 10 if up >= 0xFF00 else (5 if d.get("interface_number", -1) >= 1 else 1)
-                            candidatos.append((score_if, pid, d.get("path")))
+                            if up >= 0xFF00 or vid in FLYDIGI_VIDS:
+                                score_if = 10 if up >= 0xFF00 else 5
+                                candidatos.append((score_if, pid, d.get("path")))
                     if candidatos:
                         candidatos.sort(key=lambda x: x[0], reverse=True)
                         _, pid_sel, path_sel = candidatos[0]
@@ -315,8 +318,6 @@ class LeitorDiretoVader4Pro:
                         _teclas_ativas.add(nome_b)
                         _teclas_latched[nome_b] = agora_b
                         _ultima_tecla[0] = nome_b
-                    else:
-                        _teclas_ativas.discard(nome_b)
         if _xinput_dll is None:
             return None
         # 2. Tenta ler primeiro o slot XInput atualmente ativo (tempo: ~5 microssegundos)
@@ -500,7 +501,7 @@ DEFAULT_CONFIG = {
         "inverter_cor_time": "f10",
         "toggle_overlay":    "f11"
     },
-    "modo_cor_time": "VERMELHO",
+    "modo_cor_time": "AUTO",
     "usar_mira_automatica_360": True,
     "modo_desafogo_pressao": True,
     "usar_finalizacao_inteligente": True,
@@ -1723,8 +1724,7 @@ class ExecutorAcaoAssincrono:
     def agendar_sequencia(self, etapas_dx, duracao_botoes_s, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=True):
         agora = time.perf_counter()
         with self.lock:
-            if not rp2040_ativo:
-                directx_liberar_tudo()
+            directx_liberar_tudo()
             self.eventos_dx.clear()
             self.ativo = True
             self.rp2040_ativo = rp2040_ativo
@@ -1755,18 +1755,17 @@ class ExecutorAcaoAssincrono:
                 return False, 0, None, None
             while self.eventos_dx and agora >= self.eventos_dx[0][0]:
                 _, fn, sc = self.eventos_dx.pop(0)
+                # Dispara SEMPRE o botão de ação no DirectX (SCAN_W, SCAN_D, SCAN_A, etc.)
+                # para garantir que o passe/cruzamento/chute nunca falhe no eFootball!
+                fn(sc)
+                # E sincroniza os bits para o RP2040 simultaneamente:
                 bit_rp = SCANCODE_TO_RP2040_BTN.get(sc, 0)
                 if fn == directx_press:
                     self.override_btns |= bit_rp
                 elif fn == directx_release:
                     self.override_btns &= ~bit_rp
-                # Se a RP2040 estiver conectada, envia 100% via Gamepad HID (sem tocar no teclado DirectX)
-                # para que o eFootball nunca desvie do vetor 360° da RP2040!
-                if not self.rp2040_ativo:
-                    fn(sc)
             if agora >= self.fim_acao_ts and not self.eventos_dx:
-                if not self.rp2040_ativo:
-                    directx_liberar_tudo()
+                directx_liberar_tudo()
                 self.ativo = False
                 self.override_lx = None
                 self.override_ly = None
@@ -2361,15 +2360,12 @@ def thread_visao_radar(estado: EstadoSistema):
                 dist_meu_cursor = math.hypot(portador[0] - cursor_usuario[0], portador[1] - cursor_usuario[1]) if cursor_usuario else 99.0
                 dist_meu_bola = math.hypot(portador[0] - pos_bola[0], portador[1] - pos_bola[1]) if pos_bola else 6.0
                 dist_adv_bola = min([math.hypot(a[0] - pos_bola[0], a[1] - pos_bola[1]) for a in adversarios], default=99.0) if pos_bola else 99.0
-                if cursor_usuario is not None and dist_meu_cursor < 22.0 and dist_meu_bola <= dist_adv_bola + 8.0:
+                if cursor_usuario is not None and dist_meu_cursor < 26.0:
                     posse_instantanea = True
-                elif pos_bola is not None and dist_meu_bola <= dist_adv_bola + 3.5:
+                elif pos_bola is not None and dist_meu_bola <= dist_adv_bola + 4.5:
                     posse_instantanea = True
-                elif cursor_usuario is not None or pos_bola is not None:
-                    posse_instantanea = False
                 else:
-                    # Se tanto o cursor quanto a bola sofrerem oclusão momentânea, preserva o estado estável anterior
-                    posse_instantanea = posse_estavel
+                    posse_instantanea = (dist_meu_cursor < 34.0) if cursor_usuario else posse_estavel
                 # Histerese Anti-Flicker (4 frames = ~65ms) para evitar corte de LT em divididas
                 if posse_instantanea != posse_estavel:
                     contador_histerese_posse += 1
