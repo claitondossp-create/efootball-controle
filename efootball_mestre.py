@@ -248,7 +248,9 @@ class LeitorDiretoVader4Pro:
                         pid = d.get("product_id", 0)
                         prod = (d.get("product_string") or "").lower()
                         if vid == 0x045E:
-                            continue
+                            serial_s = (d.get("serial_number") or "").lower()
+                            if "vader" not in prod and "flydigi" not in prod and "flydigi" not in serial_s:
+                                continue
                         if vid in FLYDIGI_VIDS or ("flydigi" in prod or "vader" in prod):
                             # Prioriza interfaces vendor-defined (UsagePage >= 0xFF00)
                             up = d.get("usage_page", 0)
@@ -341,6 +343,10 @@ class LeitorDiretoVader4Pro:
                         break
             if res != 0:
                 return None
+        if res == 0 and self.modo_conexao == "BUSCANDO...":
+            modo_det = self._detectar_modo_usb_ou_dongle()
+            with self.lock:
+                self.modo_conexao = f"{modo_det} [Slot {self.slot_xinput}]"
         gp = self._state_buf.Gamepad
         raw_lx = gp.sThumbLX / 32767.0
         raw_ly = -gp.sThumbLY / 32767.0
@@ -1809,7 +1815,8 @@ class ExecutorAcaoAssincrono:
     def agendar_sequencia(self, etapas_dx, duracao_botoes_s, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=True):
         agora = time.perf_counter()
         with self.lock:
-            directx_liberar_tudo(liberar_direcionais=False)
+            if not rp2040_ativo:
+                directx_liberar_tudo(liberar_direcionais=False)
             self.eventos_dx.clear()
             self.ativo = True
             self.rp2040_ativo = rp2040_ativo
@@ -1840,19 +1847,20 @@ class ExecutorAcaoAssincrono:
                 return False, 0, None, None
             while self.eventos_dx and agora >= self.eventos_dx[0][0]:
                 _, fn, sc = self.eventos_dx.pop(0)
-                # Dispara SEMPRE o botão de ação no DirectX (SCAN_W, SCAN_D, SCAN_A, etc.)
-                # para garantir que o passe/cruzamento/chute nunca falhe no eFootball!
-                fn(sc)
-                # E sincroniza os bits para o RP2040 simultaneamente:
+                # Só injeta scancodes no DirectX se RP2040 NÃO estiver ativo (evita conflito Teclado <-> Gamepad)
+                if not self.rp2040_ativo:
+                    fn(sc)
+                # Sincroniza os bits para o RP2040 simultaneamente:
                 bit_rp = SCANCODE_TO_RP2040_BTN.get(sc, 0)
                 if fn == directx_press:
                     self.override_btns |= bit_rp
                 elif fn == directx_release:
                     self.override_btns &= ~bit_rp
             if agora >= self.fim_acao_ts and not self.eventos_dx:
-                directx_liberar_tudo(liberar_direcionais=False)
-                for sc_dir in self.teclas_direcao_ativas:
-                    directx_release(sc_dir)
+                if not self.rp2040_ativo:
+                    directx_liberar_tudo(liberar_direcionais=False)
+                    for sc_dir in self.teclas_direcao_ativas:
+                        directx_release(sc_dir)
                 self.ativo = False
                 self.override_lx = None
                 self.override_ly = None
@@ -1918,7 +1926,7 @@ def selecionar_lancamento_teleguiado(candidatos, analog_dir, atacando_direita, s
 
         # Alinhamento com a mira do analógico do jogador
         cos_alinh = v_dx * u_ax + v_dy * u_ay
-        if tem_mira_manual and cos_alinh < 0.20:
+        if tem_mira_manual and cos_alinh < 0.05:
             continue  # Fora do semiplano mirado
 
         # Cálculo de Score tático para Lançamento Teleguiado:
@@ -2184,7 +2192,7 @@ def _disparar_lancamento_ia(dp, usar_mira_360, injetar_setas_dx, estado, executo
     aereo = dp.get("aereo", False)
     tipo_p = dp.get("tipo_passe", "RASTEIRO")
     dist_m = dp.get("dist_metros", 20.0)
-    vetor_dir = dp.get("vetor_direcao") if usar_mira_360 else None
+    vetor_dir = dp.get("vetor_direcao")
     estado.telemetria.registrar_disparo(dp, tempo_sec * 1000.0, aereo)
     ang_graus = math.degrees(math.atan2(vetor_dir[1], vetor_dir[0])) if vetor_dir else 0.0
     rp_ativo = estado.rp2040_conectado
@@ -2222,7 +2230,8 @@ def thread_controle_execucao(estado: EstadoSistema):
     defesa_dx_ativa = False
     cooldown = 0.28
     ant_lanc = False
-    ant_btn_y = False
+    suprimir_btn_y_fisico = False
+    suprimir_btn_lb_fisico = False
     ant_cruz = False
     ant_btn_b = False
     ant_chute_key = False
@@ -2305,6 +2314,10 @@ def thread_controle_execucao(estado: EstadoSistema):
                 press_dpad_right = (hat[0] > 0)
                 lt_norm         = max(0.0, vader.get_axis(4)) if (vader and vader.get_numaxes() >= 5) else 0.0
                 rt_norm         = max(0.0, vader.get_axis(5)) if (vader and vader.get_numaxes() >= 6) else 0.0
+            if not press_btn_y:
+                suprimir_btn_y_fisico = False
+            if not press_btn_lb:
+                suprimir_btn_lb_fisico = False
             # Leitura rápida de estado sem deepcopy desnecessário a 1000Hz
             with estado.lock:
                 estado.analog_dir = (lx, ly)
@@ -2338,8 +2351,10 @@ def thread_controle_execucao(estado: EstadoSistema):
             if trigger_tatico:
                 if not ant_lanc and (agora - ultimo_disparo > cooldown):
                     ant_lanc = True
-                    ant_btn_y = True
                     ultimo_disparo = agora
+                    suprimir_btn_y_fisico = True
+                    if press_btn_lb:
+                        suprimir_btn_lb_fisico = True
                     if press_lanc and not bool(extras_mask & VADER4_EXT_M1):
                         consumir_tecla(tecla_lanc)
                     with estado.lock:
@@ -2364,7 +2379,7 @@ def thread_controle_execucao(estado: EstadoSistema):
                         an_norm = math.hypot(lx, ly)
                         vetor_disparo = (lx / an_norm, ly / an_norm) if an_norm > 0.20 else (dir_frente, 0.0)
                         alvo_aprox = (int(130 + 38 * vetor_disparo[0]), int(65 + 38 * vetor_disparo[1]))
-                        tempo_fallback = 0.190 if e_cavado else 0.175
+                        tempo_fallback = 0.200 if e_cavado else 0.180
                         mod_fallback = SCAN_Q if e_cavado else None
                         estado.telemetria.registrar_disparo({
                             "dist_metros": 22.0,
@@ -2373,49 +2388,10 @@ def thread_controle_execucao(estado: EstadoSistema):
                             "tipo_passe": "CAVADO_ARCO" if e_cavado else "RASTEIRO"
                         }, tempo_fallback * 1000.0, e_cavado)
                         ang_d = math.degrees(math.atan2(vetor_disparo[1], vetor_disparo[0]))
-                        print(f"\n[{origem_nome}] 🎯 Lançamento Direto ({ang_d:.0f}°) -> W ({tempo_fallback*1000:.0f}ms)")
-                        executor.agendar_combo(SCAN_W, tempo_fallback, sc_modificador=mod_fallback, vetor_dir=vetor_disparo if usar_mira_360 else None, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
+                        print(f"\n[{origem_nome}] 🎯 Lançamento Direto ({ang_d:.0f}°) -> {'LB+W' if e_cavado else 'W'} ({tempo_fallback*1000:.0f}ms)")
+                        executor.agendar_combo(SCAN_W, tempo_fallback, sc_modificador=mod_fallback, vetor_dir=vetor_disparo, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
             else:
                 ant_lanc = False
-            # 1B.2 - BOTÃO Y SIMPLES DO CONTROLE (Sem LB): Lançamento teleguiado rasteiro em profundidade
-            if press_btn_y and not press_btn_lb:
-                if not ant_btn_y and (agora - ultimo_disparo > cooldown):
-                    ant_btn_y = True
-                    ultimo_disparo = agora
-                    with estado.lock:
-                        candidatos = list(estado.candidatos_passe) if estado.candidatos_passe else []
-                        if not candidatos and estado.dados_passe:
-                            candidatos = [estado.dados_passe]
-                        elif not candidatos and estado.ultimo_passe_valido and (agora - estado.ultima_validade_ts <= 1.2):
-                            candidatos = [estado.ultimo_passe_valido]
-                        sc_x = estado.scale_x
-                        sc_y = estado.scale_y
-                        atac_dir = estado.atacando_direita
-
-                    dp = selecionar_lancamento_teleguiado(
-                        candidatos, (lx, ly), atac_dir, sc_x, sc_y, forcar_aereo=False
-                    )
-                    if dp:
-                        _disparar_lancamento_ia(
-                            dp, usar_mira_360, injetar_setas_dx, estado, executor,
-                            origem_gatilho="Y CONTROLE (TELEGUIADO RASTEIRO)"
-                        )
-                    else:
-                        dir_frente = 1.0 if atac_dir else -1.0
-                        an_norm = math.hypot(lx, ly)
-                        vetor_disparo = (lx / an_norm, ly / an_norm) if an_norm > 0.20 else (dir_frente, 0.0)
-                        alvo_aprox = (int(130 + 32 * vetor_disparo[0]), int(65 + 32 * vetor_disparo[1]))
-                        estado.telemetria.registrar_disparo({
-                            "dist_metros": 18.0,
-                            "destino_futuro": alvo_aprox,
-                            "origem": (130, 65),
-                            "tipo_passe": "RASTEIRO"
-                        }, 165.0, False)
-                        ang_d = math.degrees(math.atan2(vetor_disparo[1], vetor_disparo[0]))
-                        print(f"\n[Y CONTROLE] 🎯 Lançamento Direto ({ang_d:.0f}°) -> W (165ms)")
-                        executor.agendar_combo(SCAN_W, 0.165, sc_modificador=None, vetor_dir=vetor_disparo if usar_mira_360 else None, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
-            elif not press_btn_y:
-                ant_btn_y = False
             # --- 1C. AUTO-AVANÇO TÁTICO NO ATAQUE (Equivalente ao Botão Z Automático em Todo Ataque) ---
             auto_avanco_ativo = estado.config.get("auto_avanco_ataque", True)
             if auto_avanco_ativo and posse_atual and not teammate_run_ativo and not em_acao:
@@ -2649,8 +2625,8 @@ def thread_controle_execucao(estado: EstadoSistema):
                 if press_btn_x:     buttons |= (1 << RP_BTN_X)      # Botão 0
                 if press_btn_a:     buttons |= (1 << RP_BTN_A)      # Botão 1
                 if press_btn_b:     buttons |= (1 << RP_BTN_B)      # Botão 2
-                if press_btn_y:     buttons |= (1 << RP_BTN_Y)      # Botão 3
-                if press_btn_lb or teammate_run_ativo: buttons |= (1 << RP_BTN_LB)     # Botão 4
+                if press_btn_y and not suprimir_btn_y_fisico:     buttons |= (1 << RP_BTN_Y)      # Botão 3
+                if ((press_btn_lb and not suprimir_btn_lb_fisico) or teammate_run_ativo): buttons |= (1 << RP_BTN_LB)     # Botão 4
                 if press_btn_rb:    buttons |= (1 << RP_BTN_RB)     # Botão 5
                 if press_btn_back:  buttons |= (1 << RP_BTN_BACK)   # Botão 8
                 if press_btn_start: buttons |= (1 << RP_BTN_START)  # Botão 9
