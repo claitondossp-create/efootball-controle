@@ -547,6 +547,7 @@ DEFAULT_CONFIG = {
     },
     "modo_cor_time": "GRE_AUTO",
     "usar_mira_automatica_360": True,
+    "auto_avanco_ataque": True,
     "modo_desafogo_pressao": True,
     "usar_finalizacao_inteligente": True,
     "auto_disparo_facao": False,
@@ -1879,6 +1880,106 @@ class ExecutorAcaoAssincrono:
 # ==============================================================================
 # 6. THREAD DE CONTROLE E DISPARO DE AÇÕES (DIRECTX + RP2040 A ~1000Hz)
 # ==============================================================================
+def selecionar_lancamento_teleguiado(candidatos, analog_dir, atacando_direita, scale_x, scale_y, forcar_aereo=False):
+    """
+    Seleciona o melhor recebedor em profundidade para um LANÇAMENTO TELEGUIADO IA (enfiada de bola / facão).
+    Prioriza atacantes rompendo linhas, corredores livres à frente da linha da bola e calcula
+    o vetor futuro 360° exato no tempo certo de corrida (lead pass).
+    """
+    if not candidatos:
+        return None
+    dir_frente = 1.0 if atacando_direita else -1.0
+    an_x, an_y = analog_dir
+    an_norm = math.hypot(an_x, an_y)
+    tem_mira_manual = (an_norm >= 0.18)
+    u_ax, u_ay = (an_x / an_norm, an_y / an_norm) if tem_mira_manual else (dir_frente, 0.0)
+
+    melhor_cand = None
+    melhor_score = -9999.0
+
+    for c in candidatos:
+        if c.get("impedido", False):
+            continue
+
+        origem = c.get("origem", (130, 65))
+        df = c.get("destino_futuro", c.get("destino", (130, 65)))
+        dx_m = (df[0] - origem[0]) * scale_x
+        dy_m = (df[1] - origem[1]) * scale_y
+        dist_m = max(0.1, math.hypot(dx_m, dy_m))
+
+        # Projeção no sentido do ataque: lançamento teleguiado é para frente!
+        proj_ataque = dx_m * dir_frente
+        if proj_ataque < 1.0 and not tem_mira_manual:
+            continue  # Lançamento em profundidade busca companheiros à frente
+
+        # Vetor unitário para o destino futuro
+        v_dx = dx_m / dist_m
+        v_dy = dy_m / dist_m
+
+        # Alinhamento com a mira do analógico do jogador
+        cos_alinh = v_dx * u_ax + v_dy * u_ay
+        if tem_mira_manual and cos_alinh < 0.20:
+            continue  # Fora do semiplano mirado
+
+        # Cálculo de Score tático para Lançamento Teleguiado:
+        score = 50.0 + (70.0 * cos_alinh if tem_mira_manual else 30.0 * max(0.0, cos_alinh))
+
+        # Distância ideal de lançamento teleguiado: 14m a 35m
+        if 16.0 <= dist_m <= 32.0:
+            score += 35.0
+        elif dist_m < 16.0:
+            score += 15.0 - (16.0 - dist_m) * 1.5
+        elif dist_m <= 42.0:
+            score += 20.0 - (dist_m - 32.0) * 1.5
+        else:
+            score -= (dist_m - 42.0) * 3.0
+
+        # Bônus de rompimento (facão / ruptura da linha de zaga)
+        if c.get("rompimento", False):
+            score += 45.0
+
+        # Velocidade do recebedor (se estiver correndo veloz em profundidade)
+        vel_kmh = c.get("velocidade_kmh", 0.0)
+        if vel_kmh >= 14.0:
+            score += min(25.0, vel_kmh * 1.2)
+
+        # Penalidade se linha de passe estiver bloqueada no chão
+        bloqueado = c.get("bloqueado", False)
+        if bloqueado:
+            score -= 15.0
+
+        if score > melhor_score:
+            melhor_score = score
+            melhor_cand = c
+
+    if melhor_cand:
+        dp = copy.deepcopy(melhor_cand)
+        dist_final = dp.get("dist_metros", 20.0)
+
+        # Define se será aéreo ou rasteiro
+        if forcar_aereo or dp.get("aereo", False) or (dp.get("bloqueado", False) and dist_final >= 18.0):
+            dp["tipo_passe"] = "CAVADO_ARCO"
+            dp["aereo"] = True
+            dur_ms = int(145.0 + (min(dist_final, 38.0) / 38.0) * 120.0)  # 145ms a 265ms
+        else:
+            dp["tipo_passe"] = "RASTEIRO"
+            dp["aereo"] = False
+            dur_ms = int(135.0 + (min(dist_final, 38.0) / 38.0) * 110.0)  # 135ms a 245ms
+
+        dp["tempo_ms"] = dur_ms
+
+        # Assegura que o vetor de direção aponte precisamente para o destino futuro (lead pass)
+        df = dp.get("destino_futuro", dp.get("destino"))
+        orig = dp.get("origem")
+        if df and orig:
+            dx = (df[0] - orig[0]) * scale_x
+            dy = (df[1] - orig[1]) * scale_y
+            h = math.hypot(dx, dy)
+            if h > 1e-3:
+                dp["vetor_direcao"] = (dx / h, dy / h)
+        return dp
+    return None
+
 def selecionar_passe_curto_direcionado(candidatos, analog_dir, atacando_direita, scale_x, scale_y):
     """
     Seleciona o companheiro mais próximo e bem alinhado com a direção mirada pelo analógico esquerdo (lx, ly),
@@ -1913,10 +2014,7 @@ def selecionar_passe_curto_direcionado(candidatos, analog_dir, atacando_direita,
         if an_norm >= 0.18 and alinhamento < 0.25:
             continue
         dist_m = c.get("dist_metros", dist_comp)
-        # Critério específico para "lançamento mais curto para quem eu mirar":
-        # 1. Alinhamento direcional da mira é primordial (+85 * alinhamento)
-        # 2. Prioriza fortemente opções curtas e médias (7m a 20m)
-        # 3. Penaliza fortemente opções longas (> 24m)
+        # Critério específico para passe curto:
         score_curto = 50.0 + (85.0 * alinhamento)
         if dist_m <= 16.0:
             score_curto += 35.0 - (dist_m * 0.8)  # Mais perto = maior prioridade
@@ -1943,7 +2041,7 @@ def selecionar_passe_curto_direcionado(candidatos, analog_dir, atacando_direita,
         return dp
     return None
 
-def calcular_avanco_companheiro_propicio(candidatos, pos_passador, analog_dir, atacando_direita, scale_x, scale_y):
+def calcular_avanco_companheiro_propicio(candidatos, pos_passador, analog_dir, atacando_direita, scale_x, scale_y, apenas_se_atacante_real=False):
     """
     Calcula qual atacante deve ser acionado e qual o lado mais propício para ele correr
     segundo a posição e corredor do passador (portador da bola) no campo.
@@ -2050,6 +2148,9 @@ def calcular_avanco_companheiro_propicio(candidatos, pos_passador, analog_dir, a
 
         nome_alvo = f"Atacante #{melhor_atacante.get('id', 'IA')} ({dist_m:.1f}m)"
     else:
+        if apenas_se_atacante_real:
+            return (0.0, 0.0, "Nenhum", "NENHUM", 0.0)
+
         # Fallback sem detecção no radar: usa a direção de ataque + inclinação do analógico ou centro
         dist_m = 18.0
         nome_alvo = "Atacante de Frente"
@@ -2115,6 +2216,7 @@ def thread_controle_execucao(estado: EstadoSistema):
     executor = ExecutorAcaoAssincrono()
     ultimo_disparo = 0.0
     ultimo_auto_facao = 0.0
+    ultimo_auto_avanco = 0.0
     ultimo_cursor_def = 0.0
     ultimo_log_defesa = 0.0
     defesa_dx_ativa = False
@@ -2232,83 +2334,112 @@ def thread_controle_execucao(estado: EstadoSistema):
             press_lanc = tecla_foi_pressionada(tecla_lanc) or bool(extras_mask & VADER4_EXT_M1)
             # Combo LB+Y no controle, Botão Traseiro M1 Nativo OU Tecla 5 = Lançamento Tático Profundo (Facão)
             trigger_tatico = press_lanc or (press_btn_y and press_btn_lb)
-            # 1B.1 - LANÇAMENTO TÁTICO PROFUNDO / FACÃO IA (Tecla 5 ou LB+Y)
+            # 1B.1 - LANÇAMENTO TÁTICO PROFUNDO / FACÃO IA (Tecla 5, M1 ou LB+Y)
             if trigger_tatico:
                 if not ant_lanc and (agora - ultimo_disparo > cooldown):
                     ant_lanc = True
                     ant_btn_y = True
                     ultimo_disparo = agora
-                    if press_lanc:
+                    if press_lanc and not bool(extras_mask & VADER4_EXT_M1):
                         consumir_tecla(tecla_lanc)
                     with estado.lock:
-                        if estado.dados_passe:
-                            dp = copy.deepcopy(estado.dados_passe)
-                        elif estado.ultimo_passe_valido and (agora - estado.ultima_validade_ts <= 0.85):
-                            dp = copy.deepcopy(estado.ultimo_passe_valido)
-                        else:
-                            dp = None
-                    origem_nome = "TECLA 5 (FACÃO IA)" if press_lanc else "LB+Y CONTROLE (FACÃO IA)"
+                        candidatos = list(estado.candidatos_passe) if estado.candidatos_passe else []
+                        if not candidatos and estado.dados_passe:
+                            candidatos = [estado.dados_passe]
+                        elif not candidatos and estado.ultimo_passe_valido and (agora - estado.ultima_validade_ts <= 1.2):
+                            candidatos = [estado.ultimo_passe_valido]
+                        sc_x = estado.scale_x
+                        sc_y = estado.scale_y
+                        atac_dir = estado.atacando_direita
+
+                    e_cavado = bool(press_btn_y and press_btn_lb)
+                    dp = selecionar_lancamento_teleguiado(
+                        candidatos, (lx, ly), atac_dir, sc_x, sc_y, forcar_aereo=e_cavado
+                    )
+                    origem_nome = "TECLA 5 (FACÃO IA)" if press_lanc else ("LB+Y (LANÇAMENTO CAVADO IA)" if e_cavado else "M1 (FACÃO IA)")
                     if dp:
                         _disparar_lancamento_ia(dp, usar_mira_360, injetar_setas_dx, estado, executor, origem_gatilho=origem_nome)
                     else:
-                        dir_frente = 1.0 if estado.atacando_direita else -1.0
+                        dir_frente = 1.0 if atac_dir else -1.0
                         an_norm = math.hypot(lx, ly)
-                        vetor_disparo = (lx / an_norm, ly / an_norm) if an_norm > 0.22 else (dir_frente, 0.0)
+                        vetor_disparo = (lx / an_norm, ly / an_norm) if an_norm > 0.20 else (dir_frente, 0.0)
                         alvo_aprox = (int(130 + 38 * vetor_disparo[0]), int(65 + 38 * vetor_disparo[1]))
+                        tempo_fallback = 0.190 if e_cavado else 0.175
+                        mod_fallback = SCAN_Q if e_cavado else None
                         estado.telemetria.registrar_disparo({
-                            "dist_metros": 18.0,
+                            "dist_metros": 22.0,
                             "destino_futuro": alvo_aprox,
                             "origem": (130, 65),
-                            "tipo_passe": "RASTEIRO"
-                        }, 175.0, False)
-                        print(f"\n[{origem_nome}] 🎯 Lançamento Direto (Direção Analógico) -> Y/W (175ms)")
-                        etapas = [
-                            (0.000, directx_press, SCAN_W),
-                            (0.175, directx_release, SCAN_W)
-                        ]
-                        executor.agendar_sequencia(etapas, 0.175, vetor_disparo if usar_mira_360 else None, injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
+                            "tipo_passe": "CAVADO_ARCO" if e_cavado else "RASTEIRO"
+                        }, tempo_fallback * 1000.0, e_cavado)
+                        ang_d = math.degrees(math.atan2(vetor_disparo[1], vetor_disparo[0]))
+                        print(f"\n[{origem_nome}] 🎯 Lançamento Direto ({ang_d:.0f}°) -> W ({tempo_fallback*1000:.0f}ms)")
+                        executor.agendar_combo(SCAN_W, tempo_fallback, sc_modificador=mod_fallback, vetor_dir=vetor_disparo if usar_mira_360 else None, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
             else:
                 ant_lanc = False
-            # 1B.2 - BOTÃO Y SIMPLES DO CONTROLE (Sem LB): Lançamento curto direcionado ao jogador mirado no analógico
+            # 1B.2 - BOTÃO Y SIMPLES DO CONTROLE (Sem LB): Lançamento teleguiado rasteiro em profundidade
             if press_btn_y and not press_btn_lb:
                 if not ant_btn_y and (agora - ultimo_disparo > cooldown):
                     ant_btn_y = True
                     ultimo_disparo = agora
                     with estado.lock:
-                        candidatos = list(estado.candidatos_passe) if estado.tenho_posse_bola else []
-                        posse = estado.tenho_posse_bola
+                        candidatos = list(estado.candidatos_passe) if estado.candidatos_passe else []
+                        if not candidatos and estado.dados_passe:
+                            candidatos = [estado.dados_passe]
+                        elif not candidatos and estado.ultimo_passe_valido and (agora - estado.ultima_validade_ts <= 1.2):
+                            candidatos = [estado.ultimo_passe_valido]
                         sc_x = estado.scale_x
                         sc_y = estado.scale_y
-                    dp_curto = None
-                    if posse and candidatos:
-                        dp_curto = selecionar_passe_curto_direcionado(
-                            candidatos, (lx, ly), estado.atacando_direita, sc_x, sc_y
-                        )
-                    if dp_curto:
+                        atac_dir = estado.atacando_direita
+
+                    dp = selecionar_lancamento_teleguiado(
+                        candidatos, (lx, ly), atac_dir, sc_x, sc_y, forcar_aereo=False
+                    )
+                    if dp:
                         _disparar_lancamento_ia(
-                            dp_curto, usar_mira_360, injetar_setas_dx, estado, executor,
-                            origem_gatilho="Y CONTROLE (MIRA CURTA)"
+                            dp, usar_mira_360, injetar_setas_dx, estado, executor,
+                            origem_gatilho="Y CONTROLE (TELEGUIADO RASTEIRO)"
                         )
                     else:
-                        dir_frente = 1.0 if estado.atacando_direita else -1.0
+                        dir_frente = 1.0 if atac_dir else -1.0
                         an_norm = math.hypot(lx, ly)
                         vetor_disparo = (lx / an_norm, ly / an_norm) if an_norm > 0.20 else (dir_frente, 0.0)
-                        alvo_aprox = (int(130 + 30 * vetor_disparo[0]), int(65 + 30 * vetor_disparo[1]))
+                        alvo_aprox = (int(130 + 32 * vetor_disparo[0]), int(65 + 32 * vetor_disparo[1]))
                         estado.telemetria.registrar_disparo({
-                            "dist_metros": 14.0,
+                            "dist_metros": 18.0,
                             "destino_futuro": alvo_aprox,
                             "origem": (130, 65),
                             "tipo_passe": "RASTEIRO"
-                        }, 140.0, False)
+                        }, 165.0, False)
                         ang_d = math.degrees(math.atan2(vetor_disparo[1], vetor_disparo[0]))
-                        print(f"\n[Y CONTROLE] 🎯 Lançamento Curto Direto (Analógico {ang_d:.0f}°) -> Y/W (140ms)")
-                        etapas = [
-                            (0.000, directx_press, SCAN_W),
-                            (0.140, directx_release, SCAN_W)
-                        ]
-                        executor.agendar_sequencia(etapas, 0.140, vetor_disparo if usar_mira_360 else None, injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
+                        print(f"\n[Y CONTROLE] 🎯 Lançamento Direto ({ang_d:.0f}°) -> W (165ms)")
+                        executor.agendar_combo(SCAN_W, 0.165, sc_modificador=None, vetor_dir=vetor_disparo if usar_mira_360 else None, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
             elif not press_btn_y:
                 ant_btn_y = False
+            # --- 1C. AUTO-AVANÇO TÁTICO NO ATAQUE (Equivalente ao Botão Z Automático em Todo Ataque) ---
+            auto_avanco_ativo = estado.config.get("auto_avanco_ataque", True)
+            if auto_avanco_ativo and posse_atual and not teammate_run_ativo and not em_acao:
+                if (agora - ultimo_disparo > 0.40) and (agora - ultimo_auto_avanco > 2.40):
+                    with estado.lock:
+                        candidatos_av = list(estado.candidatos_passe) if estado.candidatos_passe else []
+                        pos_passador = estado.cursor_usuario if estado.cursor_usuario else estado.pos_bola
+                        sc_x = estado.scale_x
+                        sc_y = estado.scale_y
+                        atac_dir = estado.atacando_direita
+
+                    if candidatos_av:
+                        flick_rx, flick_ry, nome_alvo, setor_corredor, dist_m = calcular_avanco_companheiro_propicio(
+                            candidatos_av, pos_passador, (lx, ly), atac_dir, sc_x, sc_y, apenas_se_atacante_real=True
+                        )
+                        if nome_alvo != "Nenhum":
+                            ultimo_auto_avanco = agora
+                            teammate_run_fim_ts = agora + 0.160  # Pulso de 160ms para engajar o avanço
+                            teammate_run_rx = flick_rx
+                            teammate_run_ry = flick_ry
+                            directx_press(SCAN_Q)  # LB simultâneo
+                            if estado.config.get("feedback_haptico", True):
+                                disparar_rumble_haptico(left_speed=20000, right_speed=28000, duracao_s=0.10)
+                            print(f"\n[AUTO-ATAQUE] 🚀 Avanço Automático de Companheiro (Botão Z): {nome_alvo} | Corredor: {setor_corredor} | R3=({flick_rx:.2f}, {flick_ry:.2f}) [LB 160ms]")
             # --- 2. CRUZAMENTO INTELIGENTE IA (Tecla 6 ou Botão B na Área) ---
             tecla_cruz = hk.get("cruzamento_ia", "6")
             press_cruz = tecla_foi_pressionada(tecla_cruz)
@@ -2338,6 +2469,7 @@ def thread_controle_execucao(estado: EstadoSistema):
             trigger_tabela = press_tabela_key and not ant_tabela
             if trigger_tabela and (agora - ultimo_disparo > 0.20):
                 ultimo_disparo = agora
+                ultimo_auto_avanco = agora
                 if press_tabela_key and not bool(extras_mask & VADER4_EXT_Z):
                     consumir_tecla(tecla_tabela)
                 with estado.lock:
@@ -2346,7 +2478,7 @@ def thread_controle_execucao(estado: EstadoSistema):
                     sc_x = estado.scale_x
                     sc_y = estado.scale_y
                 flick_rx, flick_ry, nome_alvo, setor_corredor, dist_m = calcular_avanco_companheiro_propicio(
-                    candidatos, pos_passador, (lx, ly), estado.atacando_direita, sc_x, sc_y
+                    candidatos, pos_passador, (lx, ly), estado.atacando_direita, sc_x, sc_y, apenas_se_atacante_real=False
                 )
                 teammate_run_fim_ts = agora + 0.160  # Pulso de 160ms para engajar o avanço
                 teammate_run_rx = flick_rx
@@ -2930,6 +3062,7 @@ class OverlayInGame:
             perfil = self.estado.config.get("perfil_assistencia", "PA1_PA2")
             haptico = self.estado.config.get("feedback_haptico", True)
             autofacao = self.estado.config.get("auto_disparo_facao", False)
+            auto_avanco = self.estado.config.get("auto_avanco_ataque", True)
         base_time = "VERDE" if sou_verde else "VERMELHO"
         time_str = f"{base_time} ({placar_tag})" if placar_tag else base_time
         posse_str = "🟢 POSSE DE BOLA" if posse else "🛡️ DEFENDENDO (ANTI-1-2)"
@@ -2975,8 +3108,9 @@ class OverlayInGame:
             self.lbl_chute.configure(text="⚽ CHUTE: Sem linha limpa", fg="#555577")
         hap_str = "ON" if haptico else "OFF"
         fac_str = "ARMADO" if autofacao else "OFF"
+        autoz_str = "ON" if auto_avanco else "OFF"
         self.lbl_perfil.configure(
-            text=f"⚙️ PERFIL: {perfil} | HÁPTICO: {hap_str} | AUTO-FACÃO: {fac_str}"
+            text=f"⚙️ PERFIL: {perfil} | AUTO-Z: {autoz_str} | HÁPTICO: {hap_str} | FACÃO: {fac_str}"
         )
 
 class InterfaceMestre:
@@ -3095,6 +3229,14 @@ class InterfaceMestre:
             font=("Segoe UI", 8, "bold")
         )
         cb_rumble_facao.pack(anchor="w", pady=1)
+        self.var_autoavanco = tk.BooleanVar(value=self.estado.config.get("auto_avanco_ataque", True))
+        cb_autoavanco = tk.Checkbutton(
+            frame_time, text="Auto-Avanço de Companheiro no Ataque (Aciona Botão Z / Teammate Run automaticamente)",
+            variable=self.var_autoavanco, command=self.mudar_autoavanco,
+            bg="#0c0c14", fg="#00e5ff", selectcolor="#1c1c30", activebackground="#0c0c14",
+            font=("Segoe UI", 8, "bold")
+        )
+        cb_autoavanco.pack(anchor="w", pady=1)
         self.var_desafogo = tk.BooleanVar(value=self.estado.config.get("modo_desafogo_pressao", True))
         cb_desafogo = tk.Checkbutton(
             frame_time, text="Ativar Modo Desafogo Rápido (Quick-Release sob pressão < 1.9m)",
@@ -3289,6 +3431,10 @@ class InterfaceMestre:
     def mudar_rumble_facao(self):
         with self.estado.lock:
             self.estado.config["rumble_alerta_facao"] = bool(self.var_rumble_facao.get())
+            self.estado.salvar_config()
+    def mudar_autoavanco(self):
+        with self.estado.lock:
+            self.estado.config["auto_avanco_ataque"] = bool(self.var_autoavanco.get())
             self.estado.salvar_config()
     def mudar_desafogo(self):
         with self.estado.lock:
