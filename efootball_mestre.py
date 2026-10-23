@@ -81,10 +81,10 @@ KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_SCANCODE = 0x0008
 # Scancodes de hardware DirectX (Padrão Oficial eFootball PC):
-SCAN_W = 0x11     # Lançamento em Profundidade (Through Ball / Botão Y)
-SCAN_D = 0x20     # Cruzamento / Passe Longo (Lofted Pass / Botão B)
-SCAN_A = 0x1E     # Chute / Finalização (Shoot / Botão X)
-SCAN_S = 0x1F     # Passe Curto (Short Pass / Botão A)
+SCAN_W = 0x11     # Lançamento em Profundidade (Through Ball / Botão Y / Tecla W)
+SCAN_D = 0x20     # Cruzamento / Passe Longo (Lofted Pass / Botão B / Tecla D)
+SCAN_A = 0x1E     # Chute / Finalização (Shoot / Botão X / Tecla A)
+SCAN_S = 0x1F     # Passe Curto (Short Pass / Botão A / Tecla S)
 SCAN_Q = 0x10     # Troca de Cursor / Modificador Cavado (Botão LB / L1)
 SCAN_E = 0x12     # Sprint / Passe Fenomenal (Botão RT / R2)
 SCAN_C = 0x2E     # Controle Especial (Botão RB / R1)
@@ -397,10 +397,10 @@ def atualizar_rumble_haptico():
 # MAPEAMENTO OFICIAL CALIBRADO PELA TELA DO EFOOTBALL (CIRCUITPYTHON HID)
 # ==============================================================================
 # Índices exatos conforme configurado no Settings.exe do eFootball:
-RP_BTN_X  = 0   # Botão 0 -> X (Chuto / Finalização)
-RP_BTN_A  = 1   # Botão 1 -> A (Passe Curto)
-RP_BTN_B  = 2   # Botão 2 -> B (Cruzamento / Passe Longo)
-RP_BTN_Y  = 3   # Botão 3 -> Y (Lançamento em Profundidade)
+RP_BTN_X  = 0   # Botão 0 (Bit 0) -> X (Chuto / Finalização)
+RP_BTN_A  = 1   # Botão 1 (Bit 1) -> A (Passe Curto)
+RP_BTN_B  = 2   # Botão 2 (Bit 2) -> B (Cruzamento / Passe Longo)
+RP_BTN_Y  = 3   # Botão 3 (Bit 3) -> Y (Lançamento em Profundidade)
 RP_BTN_LB = 4   # Botão 4 -> LB (Troca de Cursor / Modificador Cavado)
 RP_BTN_RB = 5   # Botão 5 -> RB (Chuto Colocado / Finesse)
 RP_BTN_LT = 6   # Botão 6 -> LT (Controle Manual)
@@ -409,8 +409,8 @@ RP_BTN_BACK  = 8  # Botão 8 -> Back / Select
 RP_BTN_START = 9  # Botão 9 -> Start / Menu
 RP_BTN_LS = 10  # Botão 10 -> L3 (Clique Analógico Esquerdo)
 RP_BTN_RS = 11  # Botão 11 -> R3 (Clique Analógico Direito)
-RP_BTN_DPAD_UP    = 12  # Botão 12 (Bit 12) -> D-pad UP (Aumenta Nível Ofensivo / Sair da Retranca)
-RP_BTN_DPAD_DOWN  = 13  # Botão 13 (Bit 13) -> D-pad DOWN (Diminui Nível / Retranca)
+RP_BTN_DPAD_UP    = 12  # Botão 12 (Bit 12) -> D-pad UP
+RP_BTN_DPAD_DOWN  = 13  # Botão 13 (Bit 13) -> D-pad DOWN
 RP_BTN_DPAD_LEFT  = 14  # Botão 14 (Bit 14) -> D-pad LEFT
 RP_BTN_DPAD_RIGHT = 15  # Botão 15 (Bit 15) -> D-pad RIGHT
 # Índices de leitura do controle físico Flydigi Vader 4 Pro no Pygame (Padrão XInput):
@@ -426,10 +426,10 @@ VADER_BTN_LS = 8
 VADER_BTN_RS = 9
 # Tradução automática de Scancode -> Bit exato do CircuitPython HID (RP2040)
 SCANCODE_TO_RP2040_BTN = {
-    SCAN_A: (1 << RP_BTN_X),   # Chute -> Botão 0
-    SCAN_S: (1 << RP_BTN_A),   # Passe -> Botão 1
-    SCAN_D: (1 << RP_BTN_B),   # Cruzamento -> Botão 2
-    SCAN_W: (1 << RP_BTN_Y),   # Lançamento -> Botão 3
+    SCAN_A: (1 << RP_BTN_X),   # Chute (A) -> Botão X (Bit 0)
+    SCAN_S: (1 << RP_BTN_A),   # Passe Curto (S) -> Botão A (Bit 1)
+    SCAN_D: (1 << RP_BTN_B),   # Cruzamento (D) -> Botão B (Bit 2)
+    SCAN_W: (1 << RP_BTN_Y),   # Lançamento (W) -> Botão Y (Bit 3)
     SCAN_Q: (1 << RP_BTN_LB),  # Cavada (LB) -> Botão 4
     SCAN_C: (1 << RP_BTN_RB),  # Colocado (RB) -> Botão 5
     SCAN_Z: (1 << RP_BTN_LT),  # Manual (LT) -> Botão 6
@@ -2483,17 +2483,16 @@ def thread_controle_execucao(estado: EstadoSistema):
                 print(f"\n[TEAMMATE RUN] 🚀 Avanço de Companheiro (Botão Z): {nome_alvo} | Corredor: {setor_corredor} | R3=({flick_rx:.2f}, {flick_ry:.2f}) [LB 160ms]")
             ant_tabela = press_tabela_key
 
-            # --- 3. FINALIZAÇÃO INTELIGENTE IA (Tecla 4, Botão C Nativo ou Botão X no Ataque) ---
+            # --- 3. FINALIZAÇÃO INTELIGENTE IA (Botão C Nativo Flydigi ou Tecla 4) ---
+            # O botão X do controle físico permanece 100% manual e nativo, sem qualquer interceptação!
             usar_finalizacao = estado.config.get("usar_finalizacao_inteligente", True)
             tecla_chute = hk.get("chute_ia", "4")
             press_c = bool(extras_mask & VADER4_EXT_C)
             press_chute_key = tecla_foi_pressionada(tecla_chute) or press_c
-            tem_dados_chute = (dch_ref is not None) and posse_atual
-            trigger_chute_key = press_chute_key and not ant_chute_key
-            trigger_chute_gp = press_btn_x and not ant_btn_x and usar_finalizacao and tem_dados_chute
-            if (trigger_chute_key or trigger_chute_gp) and (agora - ultimo_disparo > cooldown):
+            trigger_chute = press_chute_key and not ant_chute_key and usar_finalizacao
+            if trigger_chute and (agora - ultimo_disparo > cooldown):
                 ultimo_disparo = agora
-                if trigger_chute_key and not press_c:
+                if press_chute_key and not press_c:
                     consumir_tecla(tecla_chute)
                 dch = dict(dch_ref) if dch_ref else None
                 if dch:
@@ -3317,7 +3316,7 @@ class InterfaceMestre:
         cb_desafogo.pack(anchor="w", fill="x", pady=1)
         self.var_chute = tk.BooleanVar(value=self.estado.config.get("usar_finalizacao_inteligente", True))
         cb_chute = tk.Checkbutton(
-            frame_time, text="Ativar Finalização Inteligente xG (Gatilho X no Ataque / Tecla 4)",
+            frame_time, text="Ativar Finalização Inteligente xG (Botão C Vader 4 / Tecla 4 | X manual)",
             variable=self.var_chute, command=self.mudar_finalizacao,
             bg="#0c0c14", fg="#ffcc00", selectcolor="#1c1c30", activebackground="#0c0c14",
             font=("Segoe UI", 8, "bold"), anchor="w"
@@ -3399,7 +3398,7 @@ class InterfaceMestre:
         self.lbl_tecla_monitor_topo.pack(fill="x", pady=(2, 6))
         self.botoes_teclas = {}
         acoes = [
-            ("chute_ia", "⚽ Finalização Inteligente xG (X)", "A / LB+A / RB+A / RT+A"),
+            ("chute_ia", "⚽ Finalização Inteligente xG (C / 4)", "A / LB+A / RB+A / RT+A"),
             ("lancamento_ia", "🎯 Lançamento Tático / Facão (5)", "W / LB+W / RT+W"),
             ("cruzamento_ia", "⚡ Cruzamento Inteligente IA (B)", "D / D+D / LB+D"),
             ("tabela_12", "🚀 Avanço de Companheiro (Z)", "LB+R3 (Desmarque no Vazio)"),
