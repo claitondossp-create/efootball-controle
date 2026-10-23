@@ -18,7 +18,9 @@
         "cruzamento_ia": "6",
         "tabela_12": "3",
         "defesa_ia": "7",
-        "inverter_cor_time": "f10",
+        "toggle_auto_avanco": "f10",
+        "toggle_mira_360": "f9",
+        "inverter_cor_time": "f8",
         "toggle_overlay": "f11"
     },
     "modo_cor_time": "GRE_AUTO",

@@ -202,31 +202,25 @@ class LeitorDiretoVader4Pro:
         return "XINPUT 1000Hz (DONGLE/CABO)"
     def _decodificar_pacote_hid_flydigi(self, data: bytes):
         """
-        Extrai a máscara dos botões C, Z, M1, M2, M3, M4 do pacote Raw HID (32 ou 64 bytes)
-        tanto no protocolo do Cabo USB quanto no protocolo do Dongle 2.4GHz.
+        Extrai a máscara dos botões C, Z, M1, M2, M3, M4 do pacote Raw HID do Flydigi Vader 4 Pro.
+        - Relatório de 14 bytes (XInput/Dongle/Cabo): Byte 10 é o bitmask nativo direto:
+          Bit 0 (0x01): C
+          Bit 1 (0x02): Z (Avanço de Companheiro / Teammate Run)
+          Bit 2 (0x04): M1 (Lançamento Tático / Facão IA)
+          Bit 3 (0x08): M2 (Defesa IA)
+          Bit 4 (0x10): M3 (Troca de Cursor)
+          Bit 5 (0x20): M4
+        - Protocolo proprietário 32/64 bytes (Header 0x04 0xFE):
+          Offset 9 ou 10 contém a extensão.
         """
-        if not data or len(data) < 12:
+        if not data or len(data) < 11:
             return 0
-        # No protocolo Flydigi Vader 4 Pro (Header 0x04 0xFE ou ReportID 0x01/0x02):
-        # Os botões extras C, Z, M1, M2, M3, M4 ficam no byte de extensão (offset 9 ou 10 no Cabo, 10 ou 11 no Dongle)
         if data[0] == 0x04 and data[1] == 0xFE:
-            ext_byte = data[9] if len(data) > 9 else 0
-            if ext_byte == 0 and len(data) > 10:
-                ext_byte = data[10]
+            ext_byte = data[9] if (len(data) > 9 and data[9] != 0) else data[10]
             return ext_byte & 0x3F
-        # Caso seja outro formato de pacote HID Flydigi, compara com o baseline em repouso
-        if self._baseline_hid is None or len(self._baseline_hid) != len(data):
-            self._baseline_hid = bytes(data)
-            return 0
-        # Verifica bytes típicos de botões extras (offsets 8 a 13)
-        mask = 0
-        for idx in (9, 10, 11, 8):
-            if idx < len(data):
-                diff = data[idx] & (~self._baseline_hid[idx])
-                if diff & 0x3F:
-                    mask |= (diff & 0x3F)
-                    break
-        return mask
+        # No Vader 4 Pro (14 bytes), Byte 10 é a máscara pura dos botões extras
+        return data[10] & 0x3F
+
     def _loop_raw_hid_hotplug(self):
         """
         Thread de background que mantém conexão Hot-Plug com o endpoint HID do Vader 4 Pro
@@ -247,16 +241,21 @@ class LeitorDiretoVader4Pro:
                         vid = d.get("vendor_id", 0)
                         pid = d.get("product_id", 0)
                         prod = (d.get("product_string") or "").lower()
-                        if vid == 0x045E:
-                            serial_s = (d.get("serial_number") or "").lower()
-                            if "vader" not in prod and "flydigi" not in prod and "flydigi" not in serial_s:
-                                continue
-                        if vid in FLYDIGI_VIDS or ("flydigi" in prod or "vader" in prod):
-                            # Prioriza interfaces vendor-defined (UsagePage >= 0xFF00)
-                            up = d.get("usage_page", 0)
-                            if up >= 0xFF00 or vid in FLYDIGI_VIDS:
-                                score_if = 10 if up >= 0xFF00 else 5
-                                candidatos.append((score_if, pid, d.get("path")))
+                        serial_s = (d.get("serial_number") or "").lower()
+                        
+                        eh_vader = (
+                            "vader" in prod or
+                            "flydigi" in prod or
+                            vid in FLYDIGI_VIDS or
+                            (vid == 0x045E and pid == 654 and ("vader" in prod or "flydigi" in prod))
+                        )
+                        if not eh_vader:
+                            continue
+
+                        up = d.get("usage_page", 0)
+                        # Dá nota máxima para o Vader 4 Pro reconhecido
+                        score_if = 10 if "vader" in prod else (8 if up >= 0xFF00 else 5)
+                        candidatos.append((score_if, pid, d.get("path")))
                     if candidatos:
                         candidatos.sort(key=lambda x: x[0], reverse=True)
                         _, pid_sel, path_sel = candidatos[0]
@@ -543,13 +542,15 @@ DEFAULT_CONFIG = {
     "placar_roi": PLACAR_ROI_PADRAO,
     "tag_meu_time": "GRE",
     "hotkeys": {
-        "chute_ia":          "4",
-        "lancamento_ia":     "5",
-        "cruzamento_ia":     "6",
-        "tabela_12":         "3",
-        "defesa_ia":         "7",
-        "inverter_cor_time": "f10",
-        "toggle_overlay":    "f11"
+        "chute_ia":           "4",
+        "lancamento_ia":      "5",
+        "cruzamento_ia":      "6",
+        "tabela_12":          "3",
+        "defesa_ia":          "7",
+        "toggle_auto_avanco": "f10",
+        "toggle_mira_360":    "f9",
+        "inverter_cor_time":  "f8",
+        "toggle_overlay":     "f11"
     },
     "modo_cor_time": "GRE_AUTO",
     "usar_mira_automatica_360": True,
@@ -1847,20 +1848,19 @@ class ExecutorAcaoAssincrono:
                 return False, 0, None, None
             while self.eventos_dx and agora >= self.eventos_dx[0][0]:
                 _, fn, sc = self.eventos_dx.pop(0)
-                # Só injeta scancodes no DirectX se RP2040 NÃO estiver ativo (evita conflito Teclado <-> Gamepad)
-                if not self.rp2040_ativo:
-                    fn(sc)
-                # Sincroniza os bits para o RP2040 simultaneamente:
+                # Dispara SEMPRE o botão de ação no DirectX (SCAN_W, SCAN_D, SCAN_A, etc.)
+                # para garantir que o passe/cruzamento/chute nunca falhe tanto no teclado/XInput quanto no Gamepad!
+                fn(sc)
+                # E sincroniza os bits para o RP2040 simultaneamente:
                 bit_rp = SCANCODE_TO_RP2040_BTN.get(sc, 0)
                 if fn == directx_press:
                     self.override_btns |= bit_rp
                 elif fn == directx_release:
                     self.override_btns &= ~bit_rp
             if agora >= self.fim_acao_ts and not self.eventos_dx:
-                if not self.rp2040_ativo:
-                    directx_liberar_tudo(liberar_direcionais=False)
-                    for sc_dir in self.teclas_direcao_ativas:
-                        directx_release(sc_dir)
+                directx_liberar_tudo(liberar_direcionais=False)
+                for sc_dir in self.teclas_direcao_ativas:
+                    directx_release(sc_dir)
                 self.ativo = False
                 self.override_lx = None
                 self.override_ly = None
@@ -2342,20 +2342,31 @@ def thread_controle_execucao(estado: EstadoSistema):
                         if estado.config.get("feedback_haptico", True):
                             disparar_rumble_haptico(left_speed=38000, right_speed=0, duracao_s=0.16)
                         _disparar_lancamento_ia(dict(dp_ref), True, injetar_setas_dx, estado, executor, origem_gatilho="AUTO-FACÃO IA")
-            # --- 1B. LANÇAMENTO TELEGUIADO IA (Tecla 5, Botão M1 Nativo ou Combo LB+Y) ---
+            # Proteção crítica: Se o usuário apertar qualquer botão de passe/chute/lançamento manual,
+            # cancela instantaneamente qualquer avanço em andamento para não poluir com LB ou R3:
+            if press_btn_y or press_btn_a or press_btn_b or press_btn_x:
+                if teammate_run_ativo:
+                    teammate_run_fim_ts = 0.0
+                    teammate_run_ativo = False
+                    directx_release(SCAN_Q)
+
+            # --- 1B. LANÇAMENTO TELEGUIADO IA (Paddle M1 Nativo Flydigi, Tecla 5 ou Combo LB+Y) ---
+            # NOTA: O botão Y COMUM (sozinho) permanece 100% manual e nativo, sem nenhuma interferência!
             tecla_lanc = hk.get("lancamento_ia", "5")
-            press_lanc = tecla_foi_pressionada(tecla_lanc) or bool(extras_mask & VADER4_EXT_M1)
+            press_m1 = bool(extras_mask & VADER4_EXT_M1)
+            press_lanc = tecla_foi_pressionada(tecla_lanc) or press_m1
             # Combo LB+Y no controle, Botão Traseiro M1 Nativo OU Tecla 5 = Lançamento Tático Profundo (Facão)
             trigger_tatico = press_lanc or (press_btn_y and press_btn_lb)
-            # 1B.1 - LANÇAMENTO TÁTICO PROFUNDO / FACÃO IA (Tecla 5, M1 ou LB+Y)
+
+            # 1B.1 - LANÇAMENTO TÁTICO PROFUNDO / FACÃO IA (M1, Tecla 5 ou LB+Y)
             if trigger_tatico:
                 if not ant_lanc and (agora - ultimo_disparo > cooldown):
                     ant_lanc = True
                     ultimo_disparo = agora
-                    suprimir_btn_y_fisico = True
-                    if press_btn_lb:
+                    if press_btn_y and press_btn_lb:
+                        suprimir_btn_y_fisico = True
                         suprimir_btn_lb_fisico = True
-                    if press_lanc and not bool(extras_mask & VADER4_EXT_M1):
+                    if press_lanc and not press_m1:
                         consumir_tecla(tecla_lanc)
                     with estado.lock:
                         candidatos = list(estado.candidatos_passe) if estado.candidatos_passe else []
@@ -2367,11 +2378,11 @@ def thread_controle_execucao(estado: EstadoSistema):
                         sc_y = estado.scale_y
                         atac_dir = estado.atacando_direita
 
-                    e_cavado = bool(press_btn_y and press_btn_lb)
+                    e_cavado = bool(press_btn_lb)
                     dp = selecionar_lancamento_teleguiado(
                         candidatos, (lx, ly), atac_dir, sc_x, sc_y, forcar_aereo=e_cavado
                     )
-                    origem_nome = "TECLA 5 (FACÃO IA)" if press_lanc else ("LB+Y (LANÇAMENTO CAVADO IA)" if e_cavado else "M1 (FACÃO IA)")
+                    origem_nome = "M1 (FACÃO IA)" if press_m1 else ("LB+Y (LANÇAMENTO CAVADO IA)" if (press_btn_y and press_btn_lb) else "TECLA 5 (FACÃO IA)")
                     if dp:
                         _disparar_lancamento_ia(dp, usar_mira_360, injetar_setas_dx, estado, executor, origem_gatilho=origem_nome)
                     else:
@@ -2392,9 +2403,11 @@ def thread_controle_execucao(estado: EstadoSistema):
                         executor.agendar_combo(SCAN_W, tempo_fallback, sc_modificador=mod_fallback, vetor_dir=vetor_disparo, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
             else:
                 ant_lanc = False
+
             # --- 1C. AUTO-AVANÇO TÁTICO NO ATAQUE (Equivalente ao Botão Z Automático em Todo Ataque) ---
             auto_avanco_ativo = estado.config.get("auto_avanco_ataque", True)
-            if auto_avanco_ativo and posse_atual and not teammate_run_ativo and not em_acao:
+            usuario_em_acao = (press_btn_y or press_btn_a or press_btn_b or press_btn_x or press_btn_lb or trigger_tatico or em_acao)
+            if auto_avanco_ativo and posse_atual and not teammate_run_ativo and not usuario_em_acao:
                 if (agora - ultimo_disparo > 0.40) and (agora - ultimo_auto_avanco > 2.40):
                     with estado.lock:
                         candidatos_av = list(estado.candidatos_passe) if estado.candidatos_passe else []
@@ -2412,15 +2425,17 @@ def thread_controle_execucao(estado: EstadoSistema):
                             teammate_run_fim_ts = agora + 0.160  # Pulso de 160ms para engajar o avanço
                             teammate_run_rx = flick_rx
                             teammate_run_ry = flick_ry
-                            directx_press(SCAN_Q)  # LB simultâneo
+                            if not estado.rp2040_conectado:
+                                directx_press(SCAN_Q)  # LB simultâneo apenas se RP2040 inativo
                             if estado.config.get("feedback_haptico", True):
                                 disparar_rumble_haptico(left_speed=20000, right_speed=28000, duracao_s=0.10)
                             print(f"\n[AUTO-ATAQUE] 🚀 Avanço Automático de Companheiro (Botão Z): {nome_alvo} | Corredor: {setor_corredor} | R3=({flick_rx:.2f}, {flick_ry:.2f}) [LB 160ms]")
-            # --- 2. CRUZAMENTO INTELIGENTE IA (Tecla 6 ou Botão B na Área) ---
+
+            # --- 2. CRUZAMENTO INTELIGENTE IA (Tecla 6 ou Botão B quando houver recebedor na Área) ---
             tecla_cruz = hk.get("cruzamento_ia", "6")
             press_cruz = tecla_foi_pressionada(tecla_cruz)
             trigger_cruz_key = press_cruz and not ant_cruz
-            trigger_cruz_gp = press_btn_b and not ant_btn_b and (dc_ref is not None) and posse_atual
+            trigger_cruz_gp = press_btn_b and not ant_btn_b and (dc_ref is not None)
             if (trigger_cruz_key or trigger_cruz_gp) and (agora - ultimo_disparo > cooldown):
                 ultimo_disparo = agora
                 if trigger_cruz_key:
@@ -2432,21 +2447,23 @@ def thread_controle_execucao(estado: EstadoSistema):
                     dist_m = dc.get("dist_metros", 25.0)
                     tempo_sec = max(0.095, min(0.350, dc["tempo_ms"] / 1000.0))
                     vetor_dir = dc.get("vetor_direcao") if usar_mira_360 else None
-                    print(f"\n[DISPARO] ⚡ Cruzamento B Normal: {tag} ({setor}) | Dist={dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms")
+                    print(f"\n[DISPARO] ⚡ Cruzamento B Inteligente: {tag} ({setor}) | Dist={dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms")
                     executor.agendar_combo(SCAN_D, tempo_sec, sc_modificador=None, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
                 else:
                     print("\n[DISPARO] ⚡ Cruzamento Manual B (Sem alvo na área) -> D (170ms)")
                     executor.agendar_combo(SCAN_D, 0.170, sc_modificador=None, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=estado.rp2040_conectado)
             ant_cruz = press_cruz
             ant_btn_b = press_btn_b
+
             # --- 2B. TEAMMATE RUN / AVANÇO TÁTICO DE COMPANHEIRO SEM A BOLA (Botão Z Nativo Flydigi ou Tecla 3) ---
             tecla_tabela = hk.get("tabela_12", "3")
-            press_tabela_key = tecla_foi_pressionada(tecla_tabela) or bool(extras_mask & VADER4_EXT_Z)
+            press_z = bool(extras_mask & VADER4_EXT_Z)
+            press_tabela_key = tecla_foi_pressionada(tecla_tabela) or press_z
             trigger_tabela = press_tabela_key and not ant_tabela
             if trigger_tabela and (agora - ultimo_disparo > 0.20):
                 ultimo_disparo = agora
                 ultimo_auto_avanco = agora
-                if press_tabela_key and not bool(extras_mask & VADER4_EXT_Z):
+                if press_tabela_key and not press_z:
                     consumir_tecla(tecla_tabela)
                 with estado.lock:
                     candidatos = list(estado.candidatos_passe) if estado.tenho_posse_bola else []
@@ -2459,21 +2476,24 @@ def thread_controle_execucao(estado: EstadoSistema):
                 teammate_run_fim_ts = agora + 0.160  # Pulso de 160ms para engajar o avanço
                 teammate_run_rx = flick_rx
                 teammate_run_ry = flick_ry
-                directx_press(SCAN_Q)  # Pressiona LB simultâneo
+                if not estado.rp2040_conectado:
+                    directx_press(SCAN_Q)  # Pressiona LB simultâneo
                 if estado.config.get("feedback_haptico", True):
                     disparar_rumble_haptico(left_speed=28000, right_speed=42000, duracao_s=0.15)
                 print(f"\n[TEAMMATE RUN] 🚀 Avanço de Companheiro (Botão Z): {nome_alvo} | Corredor: {setor_corredor} | R3=({flick_rx:.2f}, {flick_ry:.2f}) [LB 160ms]")
             ant_tabela = press_tabela_key
+
             # --- 3. FINALIZAÇÃO INTELIGENTE IA (Tecla 4, Botão C Nativo ou Botão X no Ataque) ---
             usar_finalizacao = estado.config.get("usar_finalizacao_inteligente", True)
             tecla_chute = hk.get("chute_ia", "4")
-            press_chute_key = tecla_foi_pressionada(tecla_chute) or bool(extras_mask & VADER4_EXT_C)
+            press_c = bool(extras_mask & VADER4_EXT_C)
+            press_chute_key = tecla_foi_pressionada(tecla_chute) or press_c
             tem_dados_chute = (dch_ref is not None) and posse_atual
             trigger_chute_key = press_chute_key and not ant_chute_key
             trigger_chute_gp = press_btn_x and not ant_btn_x and usar_finalizacao and tem_dados_chute
             if (trigger_chute_key or trigger_chute_gp) and (agora - ultimo_disparo > cooldown):
                 ultimo_disparo = agora
-                if trigger_chute_key:
+                if trigger_chute_key and not press_c:
                     consumir_tecla(tecla_chute)
                 dch = dict(dch_ref) if dch_ref else None
                 if dch:
@@ -2491,8 +2511,31 @@ def thread_controle_execucao(estado: EstadoSistema):
                     executor.agendar_combo(SCAN_A, 0.135, sc_modificador=None, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=estado.rp2040_conectado)
             ant_chute_key = press_chute_key
             ant_btn_x = press_btn_x
-            # --- 4. INVERTER TIME MANUALMENTE (F10) & TOGGLE OVERLAY (F11) ---
-            tecla_inv = hk.get("inverter_cor_time", "f10")
+
+            # --- 4. ATALHOS GLOBAIS (F10=Auto-Avanço Z, F9=Mira 360, F8=Inverter Time, F11=Overlay) ---
+            tecla_auto_z = hk.get("toggle_auto_avanco", "f10")
+            if tecla_foi_pressionada(tecla_auto_z):
+                consumir_tecla(tecla_auto_z)
+                with estado.lock:
+                    novo_st = not estado.config.get("auto_avanco_ataque", True)
+                    estado.config["auto_avanco_ataque"] = novo_st
+                    estado.salvar_config()
+                if estado.config.get("feedback_haptico", True):
+                    disparar_rumble_haptico(left_speed=38000 if novo_st else 18000, right_speed=38000 if novo_st else 0, duracao_s=0.15)
+                st_txt = "🟢 ATIVADO" if novo_st else "🔴 DESATIVADO"
+                print(f"\n[HOTKEY F10] 🚀 Auto-Avanço de Companheiro no Ataque (Botão Z): {st_txt}")
+
+            tecla_mira = hk.get("toggle_mira_360", "f9")
+            if tecla_foi_pressionada(tecla_mira):
+                consumir_tecla(tecla_mira)
+                with estado.lock:
+                    novo_mira = not estado.config.get("usar_mira_automatica_360", True)
+                    estado.config["usar_mira_automatica_360"] = novo_mira
+                    estado.salvar_config()
+                st_mira = "🟢 ATIVADA" if novo_mira else "🔴 DESATIVADA"
+                print(f"\n[HOTKEY F9] 🎯 Mira Direcional 360° IA: {st_mira}")
+
+            tecla_inv = hk.get("inverter_cor_time", "f8")
             if tecla_foi_pressionada(tecla_inv):
                 consumir_tecla(tecla_inv)
                 with estado.lock:
@@ -2501,6 +2544,7 @@ def thread_controle_execucao(estado: EstadoSistema):
                     estado.config["modo_cor_time"] = novo_modo
                     estado.salvar_config()
                     print(f"\n[TIME] Invertido manualmente e salvo: {novo_modo}")
+
             tecla_ovl = hk.get("toggle_overlay", "f11")
             if tecla_foi_pressionada(tecla_ovl):
                 consumir_tecla(tecla_ovl)
@@ -3086,7 +3130,7 @@ class OverlayInGame:
         fac_str = "ARMADO" if autofacao else "OFF"
         autoz_str = "ON" if auto_avanco else "OFF"
         self.lbl_perfil.configure(
-            text=f"⚙️ PERFIL: {perfil} | AUTO-Z: {autoz_str} | HÁPTICO: {hap_str} | FACÃO: {fac_str}"
+            text=f"⚙️ PERFIL: {perfil} | AUTO-Z (F10): {autoz_str} | HÁPTICO: {hap_str} | FACÃO: {fac_str}"
         )
 
 class InterfaceMestre:
@@ -3154,15 +3198,81 @@ class InterfaceMestre:
         self.lbl_status.pack(fill="x", side="bottom")
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=6)
-        self.tab_visao = tk.Frame(self.notebook, bg="#0c0c14")
-        self.notebook.add(self.tab_visao, text="  👁️ Visão Computacional  ")
+
+        # 2. Container com Canvas e Barra de Rolagem Suave para a Aba Visão Computacional
+        self.tab_visao_container = tk.Frame(self.notebook, bg="#0c0c14")
+        self.notebook.add(self.tab_visao_container, text="  👁️ Visão Computacional  ")
+
+        canvas_visao = tk.Canvas(self.tab_visao_container, bg="#0c0c14", highlightthickness=0)
+        scroll_visao = ttk.Scrollbar(self.tab_visao_container, orient="vertical", command=canvas_visao.yview)
+        self.tab_visao = tk.Frame(canvas_visao, bg="#0c0c14")
+
+        self.tab_visao.bind("<Configure>", lambda e: canvas_visao.configure(scrollregion=canvas_visao.bbox("all")))
+        canvas_window = canvas_visao.create_window((0, 0), window=self.tab_visao, anchor="nw")
+
+        def _on_canvas_configure(e):
+            canvas_visao.itemconfig(canvas_window, width=e.width)
+        canvas_visao.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            canvas_visao.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.tab_visao.bind_all("<MouseWheel>", _on_mousewheel)
+
+        canvas_visao.pack(side="left", fill="both", expand=True)
+        scroll_visao.pack(side="right", fill="y")
+        canvas_visao.configure(yscrollcommand=scroll_visao.set)
+
         self.tab_stats = tk.Frame(self.notebook, bg="#0c0c14")
         self.notebook.add(self.tab_stats, text="  📊 Estatísticas do Lançamento  ")
         self._construir_aba_visao()
         self._construir_aba_estatisticas()
         self.overlay = OverlayInGame(self.root, self.estado)
         self.atualizar_status()
+
     def _construir_aba_visao(self):
+        # --- CARD DE DESTAQUE NO TOPO: CONTROLES RÁPIDOS & AUTO-AVANÇO (F10) ---
+        frame_destaque = tk.LabelFrame(
+            self.tab_visao, text=" ⭐ CONTROLES RÁPIDOS & AUTO-AVANÇO (F10) ",
+            bg="#101322", fg="#00ffcc", font=("Segoe UI", 10, "bold"), padx=12, pady=8,
+            highlightbackground="#00ffcc", highlightthickness=1
+        )
+        frame_destaque.pack(fill="x", padx=10, pady=(4, 8))
+
+        f_top_av = tk.Frame(frame_destaque, bg="#101322")
+        f_top_av.pack(fill="x", pady=2)
+
+        self.var_autoavanco = tk.BooleanVar(value=self.estado.config.get("auto_avanco_ataque", True))
+        self.cb_autoavanco = tk.Checkbutton(
+            f_top_av, text="🚀 Auto-Avanço de Companheiro no Ataque (Botão Z IA)  [Atalho: F10]",
+            variable=self.var_autoavanco, command=self.mudar_autoavanco,
+            bg="#101322", fg="#00e5ff", selectcolor="#1c1c38", activebackground="#101322",
+            font=("Segoe UI", 9, "bold"), anchor="w"
+        )
+        self.cb_autoavanco.pack(side="left", fill="x", expand=True)
+
+        st_av = "● LIGADO" if self.var_autoavanco.get() else "○ DESLIGADO"
+        st_fg = "#00ff88" if self.var_autoavanco.get() else "#8888aa"
+        self.lbl_autoavanco_status = tk.Label(
+            f_top_av, text=st_av, font=("Segoe UI", 8, "bold"), fg=st_fg, bg="#181c30", padx=8, pady=2, relief="groove"
+        )
+        self.lbl_autoavanco_status.pack(side="right", padx=5)
+
+        self.var_mira360 = tk.BooleanVar(value=self.estado.config.get("usar_mira_automatica_360", True))
+        cb_mira = tk.Checkbutton(
+            frame_destaque, text="🎯 Mira Direcional 360° IA (Pre-Aim 18ms + Follow-Through 65ms)  [Atalho: F9]",
+            variable=self.var_mira360, command=self.mudar_mira360,
+            bg="#101322", fg="#00ff88", selectcolor="#1c1c38", activebackground="#101322",
+            font=("Segoe UI", 9, "bold"), anchor="w"
+        )
+        cb_mira.pack(anchor="w", fill="x", pady=2)
+
+        lbl_m1_info = tk.Label(
+            frame_destaque,
+            text="🎮 Lançamento Teleguiado IA: Paddle Traseiro M1 / LB+Y / Tecla 5\n   (O botão Y comum permanece 100% manual e nativo sem nenhuma interferência!)",
+            font=("Segoe UI", 8), fg="#ffcc00", bg="#101322", justify="left", anchor="w"
+        )
+        lbl_m1_info.pack(anchor="w", fill="x", pady=(2, 0))
+
         frame_time = tk.LabelFrame(
             self.tab_visao, text=" Detecção de Equipe & Assistência Autônoma da IA ",
             bg="#0c0c14", fg="#00ffcc", font=("Segoe UI", 9, "bold"), padx=10, pady=4
@@ -3181,14 +3291,6 @@ class InterfaceMestre:
                 activebackground="#0c0c14", font=("Segoe UI", 8)
             )
             rb.pack(anchor="w", pady=1)
-        self.var_mira360 = tk.BooleanVar(value=self.estado.config.get("usar_mira_automatica_360", True))
-        cb_mira = tk.Checkbutton(
-            frame_time, text="Ativar Mira Direcional 100% IA (Pre-Aim 18ms + Follow-Through 65ms)",
-            variable=self.var_mira360, command=self.mudar_mira360,
-            bg="#0c0c14", fg="#00ff88", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8, "bold"), anchor="w"
-        )
-        cb_mira.pack(anchor="w", fill="x", pady=1)
         self.var_autofacao = tk.BooleanVar(value=self.estado.config.get("auto_disparo_facao", False))
         cb_autofacao = tk.Checkbutton(
             frame_time, text="Auto-Disparo de Lançamento em Facão Claro (IA passa sozinha na infiltração)",
@@ -3205,14 +3307,6 @@ class InterfaceMestre:
             font=("Segoe UI", 8, "bold"), anchor="w"
         )
         cb_rumble_facao.pack(anchor="w", fill="x", pady=1)
-        self.var_autoavanco = tk.BooleanVar(value=self.estado.config.get("auto_avanco_ataque", True))
-        cb_autoavanco = tk.Checkbutton(
-            frame_time, text="Auto-Avanço de Companheiro no Ataque (Botão Z IA)",
-            variable=self.var_autoavanco, command=self.mudar_autoavanco,
-            bg="#0c0c14", fg="#00e5ff", selectcolor="#1c1c30", activebackground="#0c0c14",
-            font=("Segoe UI", 8, "bold"), anchor="w"
-        )
-        cb_autoavanco.pack(anchor="w", fill="x", pady=1)
         self.var_desafogo = tk.BooleanVar(value=self.estado.config.get("modo_desafogo_pressao", True))
         cb_desafogo = tk.Checkbutton(
             frame_time, text="Ativar Modo Desafogo Rápido (Quick-Release sob pressão < 1.9m)",
@@ -3409,9 +3503,15 @@ class InterfaceMestre:
             self.estado.config["rumble_alerta_facao"] = bool(self.var_rumble_facao.get())
             self.estado.salvar_config()
     def mudar_autoavanco(self):
+        val = bool(self.var_autoavanco.get())
         with self.estado.lock:
-            self.estado.config["auto_avanco_ataque"] = bool(self.var_autoavanco.get())
+            self.estado.config["auto_avanco_ataque"] = val
             self.estado.salvar_config()
+        st_txt = "● LIGADO" if val else "○ DESLIGADO"
+        st_fg = "#00ff88" if val else "#8888aa"
+        if hasattr(self, "lbl_autoavanco_status"):
+            self.lbl_autoavanco_status.configure(text=st_txt, fg=st_fg)
+
     def mudar_desafogo(self):
         with self.estado.lock:
             self.estado.config["modo_desafogo_pressao"] = bool(self.var_desafogo.get())
@@ -3484,6 +3584,18 @@ class InterfaceMestre:
             self.overlay.destruir()
             self.root.destroy()
             return
+        # Sincroniza estado de auto-avanço se alternado via F10
+        cfg_av = self.estado.config.get("auto_avanco_ataque", True)
+        if hasattr(self, "var_autoavanco") and self.var_autoavanco.get() != cfg_av:
+            self.var_autoavanco.set(cfg_av)
+            st_txt = "● LIGADO" if cfg_av else "○ DESLIGADO"
+            st_fg = "#00ff88" if cfg_av else "#8888aa"
+            if hasattr(self, "lbl_autoavanco_status"):
+                self.lbl_autoavanco_status.configure(text=st_txt, fg=st_fg)
+        # Sincroniza mira 360 se alternada via F9
+        cfg_mira = self.estado.config.get("usar_mira_automatica_360", True)
+        if hasattr(self, "var_mira360") and self.var_mira360.get() != cfg_mira:
+            self.var_mira360.set(cfg_mira)
         # Sincroniza estado de overlay se alternado via F11
         cfg_ovl = self.estado.config.get("overlay_ingame", True)
         if self.var_overlay.get() != cfg_ovl:
