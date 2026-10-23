@@ -9,6 +9,7 @@ tux-invader/
 # Logs and conversation exports
 cpnversa.md
 *.log
+*_backup.py
 
 # Environments and caches
 .env

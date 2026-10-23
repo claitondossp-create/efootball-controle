@@ -9,10 +9,15 @@
         "chute_ia": "4",
         "lancamento_ia": "5",
         "cruzamento_ia": "6",
-        "inverter_cor_time": "f10"
+        "inverter_cor_time": "f10",
+        "toggle_overlay": "f11"
     },
-    "modo_cor_time": "AUTO",
+    "modo_cor_time": "VERMELHO",
     "usar_mira_automatica_360": true,
     "modo_desafogo_pressao": true,
-    "usar_finalizacao_inteligente": true
+    "usar_finalizacao_inteligente": true,
+    "auto_disparo_facao": false,
+    "perfil_assistencia": "PA3_MANUAL",
+    "feedback_haptico": true,
+    "overlay_ingame": true
 }
