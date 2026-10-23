@@ -540,6 +540,7 @@ DEFAULT_CONFIG = {
         "chute_ia":          "4",
         "lancamento_ia":     "5",
         "cruzamento_ia":     "6",
+        "tabela_12":         "3",
         "defesa_ia":         "7",
         "inverter_cor_time": "f10",
         "toggle_overlay":    "f11"
@@ -1990,6 +1991,7 @@ def thread_controle_execucao(estado: EstadoSistema):
     ant_btn_b = False
     ant_chute_key = False
     ant_btn_x = False
+    ant_tabela = False
     ant_dpad_up = False
     ant_dpad_down = False
     ant_dpad_left = False
@@ -2169,9 +2171,9 @@ def thread_controle_execucao(estado: EstadoSistema):
                         executor.agendar_sequencia(etapas, 0.140, vetor_disparo if usar_mira_360 else None, injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
             elif not press_btn_y:
                 ant_btn_y = False
-            # --- 2. CRUZAMENTO INTELIGENTE IA (Tecla 6, Botão Z Nativo ou Botão B na Área) ---
+            # --- 2. CRUZAMENTO INTELIGENTE IA (Tecla 6 ou Botão B na Área) ---
             tecla_cruz = hk.get("cruzamento_ia", "6")
-            press_cruz = tecla_foi_pressionada(tecla_cruz) or bool(extras_mask & VADER4_EXT_Z)
+            press_cruz = tecla_foi_pressionada(tecla_cruz)
             trigger_cruz_key = press_cruz and not ant_cruz
             trigger_cruz_gp = press_btn_b and not ant_btn_b and (dc_ref is not None) and posse_atual
             if (trigger_cruz_key or trigger_cruz_gp) and (agora - ultimo_disparo > cooldown):
@@ -2192,6 +2194,41 @@ def thread_controle_execucao(estado: EstadoSistema):
                     executor.agendar_combo(SCAN_D, 0.170, sc_modificador=None, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=estado.rp2040_conectado)
             ant_cruz = press_cruz
             ant_btn_b = press_btn_b
+            # --- 2B. TABELA 1-2 / PASS & GO DINÂMICO (Botão Z Nativo Flydigi Vader 4 Pro ou Tecla 3) ---
+            tecla_tabela = hk.get("tabela_12", "3")
+            press_tabela_key = tecla_foi_pressionada(tecla_tabela) or bool(extras_mask & VADER4_EXT_Z)
+            trigger_tabela = press_tabela_key and not ant_tabela
+            if trigger_tabela and (agora - ultimo_disparo > cooldown):
+                ultimo_disparo = agora
+                if press_tabela_key and not bool(extras_mask & VADER4_EXT_Z):
+                    consumir_tecla(tecla_tabela)
+                with estado.lock:
+                    candidatos = list(estado.candidatos_passe) if estado.tenho_posse_bola else []
+                    posse = estado.tenho_posse_bola
+                    sc_x = estado.scale_x
+                    sc_y = estado.scale_y
+                dp_curto = None
+                if posse and candidatos:
+                    dp_curto = selecionar_passe_curto_direcionado(
+                        candidatos, (lx, ly), estado.atacando_direita, sc_x, sc_y
+                    )
+                if dp_curto:
+                    dist_m = dp_curto.get("dist_metros", 14.0)
+                    tempo_sec = max(0.100, min(0.200, dp_curto.get("tempo_ms", 130.0) / 1000.0))
+                    vetor_dir = dp_curto.get("vetor_direcao") if usar_mira_360 else None
+                    print(f"\n[TABELA 1-2] ⚡ Pass & Go (Botão Z): Passe Rasteiro -> Alvo {dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms + Arrancada do Passador!")
+                else:
+                    dir_frente = 1.0 if estado.atacando_direita else -1.0
+                    an_norm = math.hypot(lx, ly)
+                    vetor_disparo = (lx / an_norm, ly / an_norm) if an_norm > 0.18 else (dir_frente, 0.0)
+                    vetor_dir = vetor_disparo if usar_mira_360 else None
+                    tempo_sec = 0.125
+                    ang_d = math.degrees(math.atan2(vetor_disparo[1], vetor_disparo[0]))
+                    print(f"\n[TABELA 1-2] ⚡ Pass & Go Direto (Botão Z): Mira {ang_d:.0f}° | Barra={tempo_sec*1000:.0f}ms (LB + A)")
+                if estado.config.get("feedback_haptico", True):
+                    disparar_rumble_haptico(left_speed=36000, right_speed=0, duracao_s=0.14)
+                executor.agendar_combo(SCAN_S, tempo_sec, sc_modificador=SCAN_Q, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
+            ant_tabela = press_tabela_key
             # --- 3. FINALIZAÇÃO INTELIGENTE IA (Tecla 4, Botão C Nativo ou Botão X no Ataque) ---
             usar_finalizacao = estado.config.get("usar_finalizacao_inteligente", True)
             tecla_chute = hk.get("chute_ia", "4")
@@ -3016,6 +3053,7 @@ class InterfaceMestre:
             ("chute_ia", "⚽ Finalização Inteligente xG (X)", "A / LB+A / RB+A / RT+A"),
             ("lancamento_ia", "🎯 Lançamento Tático / Facão (5)", "W / LB+W / RT+W"),
             ("cruzamento_ia", "⚡ Cruzamento Inteligente IA (B)", "D / D+D / LB+D"),
+            ("tabela_12", "⚡ Tabela 1-2 Pass & Go (Z)", "LB+A (Passador Dispara)"),
             ("defesa_ia", "🛡️ Reposição & Sombra 1-2 (LT/7)", "LT (Z) + RT (E) + 360°"),
         ]
         for chave, nome, comando_jogo in acoes:
