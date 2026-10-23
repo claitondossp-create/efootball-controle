@@ -41,7 +41,7 @@ Sistema integrado de assistência tática em tempo real para **eFootball (PC —
 | **Finalização Inteligente xG** | Botão Frontal **C** | Tecla `4` ou Botão **X** (no ataque) | Mira 360° no canto descoberto do goleiro (`X`, `LB+X`, `RB+X` ou `RT+X`). |
 | **Lançamento Tático / Facão** | Botão Traseiro **M1** | Tecla `5` ou `LB + Y` | Passe em profundidade teleguiado 360° com Bhaskara (`Y`, `LB+Y` ou `RT+Y`). |
 | **Passe Curto Mirado** | Botão **Y** Simples | Botão **Y** (sem LB) | Lançamento curto e rasteiro ($115\text{ms}$–$170\text{ms}$) no companheiro apontado pelo analógico. |
-| **Tabela 1-2 / Pass & Go** | Botão Frontal **Z** | Tecla `3` | Passe rasteiro calibrado com arrancada imediata do passador (`LB + A`). |
+| **Avanço de Companheiro (Teammate Run)** | Botão Frontal **Z** | Tecla `3` | Manda o atacante disparar no corredor mais propício segundo o passador (`LB + R3` sem tocar na bola). |
 | **Cruzamento Normal B** | Botão **B** | Tecla `6` ou Botão **B** (na área) | Cruzamento direto com cálculo de força balística pela IA (`B`). |
 | **Reposição & Sombra 1-2** | Botão Traseiro **M2** | Tecla `7` ou `LT` Fundo ($\ge 72\%$) | Guia o marcador para fechar a tabela 1-2 (`SOMBRA_TABELA`) ou recompor o funil (`RT/LT`). |
 | **Troca de Cursor Anti-Tabela** | Botão Traseiro **M3** | Automático (opcional na GUI) | Pulso direcionado em `LB` apontando para o zagueiro que cobre o corredor da tabela. |

@@ -1943,6 +1943,140 @@ def selecionar_passe_curto_direcionado(candidatos, analog_dir, atacando_direita,
         return dp
     return None
 
+def calcular_avanco_companheiro_propicio(candidatos, pos_passador, analog_dir, atacando_direita, scale_x, scale_y):
+    """
+    Calcula qual atacante deve ser acionado e qual o lado mais propício para ele correr
+    segundo a posição e corredor do passador (portador da bola) no campo.
+    Retorna: (flick_rx, flick_ry, nome_jogador, setor_corredor, dist_metros)
+    """
+    dir_frente = 1.0 if atacando_direita else -1.0
+    an_x, an_y = analog_dir
+    an_norm = math.hypot(an_x, an_y)
+    tem_mira_manual = (an_norm >= 0.20)
+    u_ax, u_ay = (an_x / an_norm, an_y / an_norm) if tem_mira_manual else (dir_frente, 0.0)
+
+    px, py = pos_passador if pos_passador else (130, 65)
+
+    melhor_atacante = None
+    melhor_score = -9999.0
+
+    if candidatos:
+        for c in candidatos:
+            dest = c.get("destino", (130, 65))
+            orig = c.get("origem", (px, py))
+            dx_m = (dest[0] - orig[0]) * scale_x
+            dy_m = (dest[1] - orig[1]) * scale_y
+            dist_m = max(0.1, math.hypot(dx_m, dy_m))
+
+            # Verifica se o companheiro está à frente do passador no sentido do ataque
+            proj_ataque = dx_m * dir_frente
+            if proj_ataque < 2.0:
+                continue  # Ignora quem está atrás da linha da bola
+
+            # Não aciona quem já está excessivamente longe (> 42m) ou impedido
+            if dist_m > 42.0 or c.get("impedido", False):
+                continue
+
+            # Alinhamento com a intenção do analógico esquerdo se o usuário estiver apontando
+            cos_alinh = (dx_m * u_ax + dy_m * u_ay) / dist_m if dist_m > 0.1 else 0.0
+            if tem_mira_manual and cos_alinh < 0.20:
+                continue  # Fora do semiplano mirado pelo usuário
+
+            # Pontuação tática para desmarque de infiltração:
+            score = 60.0
+            if tem_mira_manual:
+                score += 80.0 * cos_alinh
+            # Distância ideal de avanço de companheiro é entre 12m e 28m
+            if 12.0 <= dist_m <= 28.0:
+                score += 30.0
+            elif dist_m < 12.0:
+                score += 15.0
+            else:
+                score -= (dist_m - 28.0) * 1.5
+
+            if c.get("rompimento", False):
+                score += 25.0  # Já está em movimento de ruptura
+            if not c.get("bloqueado", False):
+                score += 18.0  # Corredor livre
+
+            if score > melhor_score:
+                melhor_score = score
+                melhor_atacante = c
+
+    # Determinação do "Lado Mais Propício segundo o Passador"
+    if melhor_atacante:
+        dest = melhor_atacante["destino"]
+        dx_rel = (dest[0] - px) * scale_x
+        dy_rel = (dest[1] - py) * scale_y
+        dist_m = melhor_atacante.get("dist_metros", math.hypot(dx_rel, dy_rel))
+        atacante_y = dest[1]
+
+        # Análise tática da posição do passador no campo (0=topo/asa esq, 65=centro, 130=fundo/asa dir):
+        if py < 48:
+            # Passador aberto na ALA ESQUERDA:
+            if atacante_y >= 55:
+                # Centroavante / Ponta oposto corta em diagonal fechando a área (Facão no 2º pau)
+                flick_x = dir_frente * 1.0
+                flick_y = 0.58  # Corta para o centro (+Y)
+                setor = "FACÃO DIAGONAL PARA DENTRO (CENTRO/ÁREA)"
+            else:
+                # Ponta/Ala esquerdo ataca a profundidade rente à linha lateral
+                flick_x = dir_frente * 1.0
+                flick_y = -0.30
+                setor = "CORREDOR LATERAL ESQUERDO"
+        elif py > 82:
+            # Passador aberto na ALA DIREITA:
+            if atacante_y <= 75:
+                # Centroavante corta para o centro em diagonal
+                flick_x = dir_frente * 1.0
+                flick_y = -0.58  # Corta para o centro (-Y)
+                setor = "FACÃO DIAGONAL PARA DENTRO (CENTRO/ÁREA)"
+            else:
+                # Ponta direito ataca a profundidade
+                flick_x = dir_frente * 1.0
+                flick_y = 0.30
+                setor = "CORREDOR LATERAL DIREITO"
+        else:
+            # Passador no CORREDOR CENTRAL (Miolo de Campo):
+            # Projeta o atacante para a diagonal de desmarque entre os zagueiros
+            if atacante_y < 65:
+                flick_x = dir_frente * 1.0
+                flick_y = -0.48  # Infiltração entre Zagueiro e Lateral Esquerdo
+                setor = "ENTRELINHAS ESQUERDA (DESMARQUE CENTRAL)"
+            else:
+                flick_x = dir_frente * 1.0
+                flick_y = 0.48   # Infiltração entre Zagueiro e Lateral Direito
+                setor = "ENTRELINHAS DIREITA (DESMARQUE CENTRAL)"
+
+        nome_alvo = f"Atacante #{melhor_atacante.get('id', 'IA')} ({dist_m:.1f}m)"
+    else:
+        # Fallback sem detecção no radar: usa a direção de ataque + inclinação do analógico ou centro
+        dist_m = 18.0
+        nome_alvo = "Atacante de Frente"
+        if tem_mira_manual:
+            flick_x = u_ax
+            flick_y = u_ay
+            setor = f"DIREÇÃO MIRADA ANALÓGICO ({math.degrees(math.atan2(u_ay, u_ax)):.0f}°)"
+        else:
+            # Se o passador está na esquerda (py < 65), aponta com leve diagonal para dentro (+Y)
+            if py < 55:
+                flick_x, flick_y = dir_frente, 0.45
+                setor = "DIAGONAL PARA O MEIO (ÁREA)"
+            elif py > 75:
+                flick_x, flick_y = dir_frente, -0.45
+                setor = "DIAGONAL PARA O MEIO (ÁREA)"
+            else:
+                flick_x, flick_y = dir_frente, 0.0
+                setor = "CENTRO EM VELOCIDADE"
+
+    # Se o usuário apontou ativamente o analógico, mescla com a intenção do jogador:
+    if tem_mira_manual:
+        flick_x = 0.55 * flick_x + 0.45 * u_ax
+        flick_y = 0.55 * flick_y + 0.45 * u_ay
+
+    norm_flick = max(1e-4, math.hypot(flick_x, flick_y))
+    return (flick_x / norm_flick, flick_y / norm_flick, nome_alvo, setor, dist_m)
+
 def _disparar_lancamento_ia(dp, usar_mira_360, injetar_setas_dx, estado, executor, origem_gatilho="MANUAL"):
     """Função auxiliar unificada para executar o lançamento teleguiado (Manual ou Auto-Facão)."""
     tempo_sec = max(0.125, min(0.350, dp["tempo_ms"] / 1000.0))
@@ -1992,6 +2126,10 @@ def thread_controle_execucao(estado: EstadoSistema):
     ant_chute_key = False
     ant_btn_x = False
     ant_tabela = False
+    teammate_run_fim_ts = 0.0
+    teammate_run_rx = 0.0
+    teammate_run_ry = 0.0
+    ant_teammate_run_ativo = False
     ant_dpad_up = False
     ant_dpad_down = False
     ant_dpad_left = False
@@ -2194,40 +2332,29 @@ def thread_controle_execucao(estado: EstadoSistema):
                     executor.agendar_combo(SCAN_D, 0.170, sc_modificador=None, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=estado.rp2040_conectado)
             ant_cruz = press_cruz
             ant_btn_b = press_btn_b
-            # --- 2B. TABELA 1-2 / PASS & GO DINÂMICO (Botão Z Nativo Flydigi Vader 4 Pro ou Tecla 3) ---
+            # --- 2B. TEAMMATE RUN / AVANÇO TÁTICO DE COMPANHEIRO SEM A BOLA (Botão Z Nativo Flydigi ou Tecla 3) ---
             tecla_tabela = hk.get("tabela_12", "3")
             press_tabela_key = tecla_foi_pressionada(tecla_tabela) or bool(extras_mask & VADER4_EXT_Z)
             trigger_tabela = press_tabela_key and not ant_tabela
-            if trigger_tabela and (agora - ultimo_disparo > cooldown):
+            if trigger_tabela and (agora - ultimo_disparo > 0.20):
                 ultimo_disparo = agora
                 if press_tabela_key and not bool(extras_mask & VADER4_EXT_Z):
                     consumir_tecla(tecla_tabela)
                 with estado.lock:
                     candidatos = list(estado.candidatos_passe) if estado.tenho_posse_bola else []
-                    posse = estado.tenho_posse_bola
+                    pos_passador = estado.cursor_usuario if estado.cursor_usuario else estado.pos_bola
                     sc_x = estado.scale_x
                     sc_y = estado.scale_y
-                dp_curto = None
-                if posse and candidatos:
-                    dp_curto = selecionar_passe_curto_direcionado(
-                        candidatos, (lx, ly), estado.atacando_direita, sc_x, sc_y
-                    )
-                if dp_curto:
-                    dist_m = dp_curto.get("dist_metros", 14.0)
-                    tempo_sec = max(0.100, min(0.200, dp_curto.get("tempo_ms", 130.0) / 1000.0))
-                    vetor_dir = dp_curto.get("vetor_direcao") if usar_mira_360 else None
-                    print(f"\n[TABELA 1-2] ⚡ Pass & Go (Botão Z): Passe Rasteiro -> Alvo {dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms + Arrancada do Passador!")
-                else:
-                    dir_frente = 1.0 if estado.atacando_direita else -1.0
-                    an_norm = math.hypot(lx, ly)
-                    vetor_disparo = (lx / an_norm, ly / an_norm) if an_norm > 0.18 else (dir_frente, 0.0)
-                    vetor_dir = vetor_disparo if usar_mira_360 else None
-                    tempo_sec = 0.125
-                    ang_d = math.degrees(math.atan2(vetor_disparo[1], vetor_disparo[0]))
-                    print(f"\n[TABELA 1-2] ⚡ Pass & Go Direto (Botão Z): Mira {ang_d:.0f}° | Barra={tempo_sec*1000:.0f}ms (LB + A)")
+                flick_rx, flick_ry, nome_alvo, setor_corredor, dist_m = calcular_avanco_companheiro_propicio(
+                    candidatos, pos_passador, (lx, ly), estado.atacando_direita, sc_x, sc_y
+                )
+                teammate_run_fim_ts = agora + 0.160  # Pulso de 160ms para engajar o avanço
+                teammate_run_rx = flick_rx
+                teammate_run_ry = flick_ry
+                directx_press(SCAN_Q)  # Pressiona LB simultâneo
                 if estado.config.get("feedback_haptico", True):
-                    disparar_rumble_haptico(left_speed=36000, right_speed=0, duracao_s=0.14)
-                executor.agendar_combo(SCAN_S, tempo_sec, sc_modificador=SCAN_Q, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
+                    disparar_rumble_haptico(left_speed=28000, right_speed=42000, duracao_s=0.15)
+                print(f"\n[TEAMMATE RUN] 🚀 Avanço de Companheiro (Botão Z): {nome_alvo} | Corredor: {setor_corredor} | R3=({flick_rx:.2f}, {flick_ry:.2f}) [LB 160ms]")
             ant_tabela = press_tabela_key
             # --- 3. FINALIZAÇÃO INTELIGENTE IA (Tecla 4, Botão C Nativo ou Botão X no Ataque) ---
             usar_finalizacao = estado.config.get("usar_finalizacao_inteligente", True)
@@ -2381,13 +2508,17 @@ def thread_controle_execucao(estado: EstadoSistema):
                 if not press_dpad_right: chaves_soltar.append(SCAN_RIGHT)
                 for sc_d in chaves_soltar:
                     directx_release(sc_d)
+            teammate_run_ativo = (agora < teammate_run_fim_ts)
+            if not teammate_run_ativo and ant_teammate_run_ativo:
+                directx_release(SCAN_Q)
+            ant_teammate_run_ativo = teammate_run_ativo
             if ser and ser.is_open:
                 buttons = 0
                 if press_btn_x:     buttons |= (1 << RP_BTN_X)      # Botão 0
                 if press_btn_a:     buttons |= (1 << RP_BTN_A)      # Botão 1
                 if press_btn_b:     buttons |= (1 << RP_BTN_B)      # Botão 2
                 if press_btn_y:     buttons |= (1 << RP_BTN_Y)      # Botão 3
-                if press_btn_lb:    buttons |= (1 << RP_BTN_LB)     # Botão 4
+                if press_btn_lb or teammate_run_ativo: buttons |= (1 << RP_BTN_LB)     # Botão 4
                 if press_btn_rb:    buttons |= (1 << RP_BTN_RB)     # Botão 5
                 if press_btn_back:  buttons |= (1 << RP_BTN_BACK)   # Botão 8
                 if press_btn_start: buttons |= (1 << RP_BTN_START)  # Botão 9
@@ -2424,7 +2555,13 @@ def thread_controle_execucao(estado: EstadoSistema):
                     out_lx, out_ly = def_override_lx, def_override_ly
                 else:
                     out_lx, out_ly = lx, ly
-                enviar_relatorio_rp2040(ser, buttons, out_lx, out_ly, rx, ry)
+                if teammate_run_ativo:
+                    out_rx = teammate_run_rx
+                    out_ry = teammate_run_ry
+                else:
+                    out_rx = rx
+                    out_ry = ry
+                enviar_relatorio_rp2040(ser, buttons, out_lx, out_ly, out_rx, out_ry)
             atualizar_rumble_haptico()
             time.sleep(0.001)
         except Exception:
@@ -3053,7 +3190,7 @@ class InterfaceMestre:
             ("chute_ia", "⚽ Finalização Inteligente xG (X)", "A / LB+A / RB+A / RT+A"),
             ("lancamento_ia", "🎯 Lançamento Tático / Facão (5)", "W / LB+W / RT+W"),
             ("cruzamento_ia", "⚡ Cruzamento Inteligente IA (B)", "D / D+D / LB+D"),
-            ("tabela_12", "⚡ Tabela 1-2 Pass & Go (Z)", "LB+A (Passador Dispara)"),
+            ("tabela_12", "🚀 Avanço de Companheiro (Z)", "LB+R3 (Desmarque no Vazio)"),
             ("defesa_ia", "🛡️ Reposição & Sombra 1-2 (LT/7)", "LT (Z) + RT (E) + 360°"),
         ]
         for chave, nome, comando_jogo in acoes:
