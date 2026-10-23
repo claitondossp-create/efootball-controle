@@ -5,3 +5,4 @@ pyserial>=3.5
 pillow>=10.0.0
 keyboard>=0.13.5
 pygame-ce>=2.4.0
+hidapi>=0.14.0

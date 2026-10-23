@@ -1,6 +1,6 @@
 """
 ================================================================================
-   EFOOTBALL MASTER AI & CONTROLLER HUB - ALL-IN-ONE (VERSÃO V2.3 AUTÔNOMA)
+   EFOOTBALL MASTER AI & CONTROLLER HUB - ALL-IN-ONE (VERSÃO V3.3 ELITE DUAL-MODE)
 ================================================================================
 Projeto Unificado de Assistência Tática em Tempo Real para eFootball (PC).
 Compatível com versões MICROSOFT STORE / XBOX APP e STEAM.
@@ -308,9 +308,15 @@ class LeitorDiretoVader4Pro:
             hid_ext_mask = self.extras_mask
         ext_total = hid_ext_mask | sdl_ext_mask
         if ext_total:
-            for nome_b, bit_b in MAPA_NOMES_EXTRAS_VADER4.items():
-                if ext_total & bit_b:
-                    _ultima_tecla[0] = nome_b
+            agora_b = time.perf_counter()
+            with _lock_teclas:
+                for nome_b, bit_b in MAPA_NOMES_EXTRAS_VADER4.items():
+                    if ext_total & bit_b:
+                        _teclas_ativas.add(nome_b)
+                        _teclas_latched[nome_b] = agora_b
+                        _ultima_tecla[0] = nome_b
+                    else:
+                        _teclas_ativas.discard(nome_b)
         if _xinput_dll is None:
             return None
         # 2. Tenta ler primeiro o slot XInput atualmente ativo (tempo: ~5 microssegundos)
@@ -494,15 +500,15 @@ DEFAULT_CONFIG = {
         "inverter_cor_time": "f10",
         "toggle_overlay":    "f11"
     },
-    "modo_cor_time": "AUTO",
+    "modo_cor_time": "VERMELHO",
     "usar_mira_automatica_360": True,
     "modo_desafogo_pressao": True,
     "usar_finalizacao_inteligente": True,
-    "auto_disparo_facao": True,
+    "auto_disparo_facao": False,
     "usar_defesa_inteligente": True,
     "auto_contencao_tabela": True,
     "auto_cursor_antitabela": False,
-    "perfil_assistencia": "PA1_PA2",
+    "perfil_assistencia": "PA3_MANUAL",
     "feedback_haptico": True,
     "overlay_ingame": True
 }
@@ -1717,7 +1723,8 @@ class ExecutorAcaoAssincrono:
     def agendar_sequencia(self, etapas_dx, duracao_botoes_s, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=True):
         agora = time.perf_counter()
         with self.lock:
-            directx_liberar_tudo()
+            if not rp2040_ativo:
+                directx_liberar_tudo()
             self.eventos_dx.clear()
             self.ativo = True
             self.rp2040_ativo = rp2040_ativo
@@ -1748,17 +1755,18 @@ class ExecutorAcaoAssincrono:
                 return False, 0, None, None
             while self.eventos_dx and agora >= self.eventos_dx[0][0]:
                 _, fn, sc = self.eventos_dx.pop(0)
-                # Dispara SEMPRE o botão de ação no DirectX (SCAN_W, SCAN_D, SCAN_A, etc.)
-                # para garantir que o passe/cruzamento nunca falhe!
-                fn(sc)
-                # E sincroniza os bits para o RP2040 simultaneamente:
                 bit_rp = SCANCODE_TO_RP2040_BTN.get(sc, 0)
                 if fn == directx_press:
                     self.override_btns |= bit_rp
                 elif fn == directx_release:
                     self.override_btns &= ~bit_rp
+                # Se a RP2040 estiver conectada, envia 100% via Gamepad HID (sem tocar no teclado DirectX)
+                # para que o eFootball nunca desvie do vetor 360° da RP2040!
+                if not self.rp2040_ativo:
+                    fn(sc)
             if agora >= self.fim_acao_ts and not self.eventos_dx:
-                directx_liberar_tudo()
+                if not self.rp2040_ativo:
+                    directx_liberar_tudo()
                 self.ativo = False
                 self.override_lx = None
                 self.override_ly = None
@@ -2353,12 +2361,15 @@ def thread_visao_radar(estado: EstadoSistema):
                 dist_meu_cursor = math.hypot(portador[0] - cursor_usuario[0], portador[1] - cursor_usuario[1]) if cursor_usuario else 99.0
                 dist_meu_bola = math.hypot(portador[0] - pos_bola[0], portador[1] - pos_bola[1]) if pos_bola else 6.0
                 dist_adv_bola = min([math.hypot(a[0] - pos_bola[0], a[1] - pos_bola[1]) for a in adversarios], default=99.0) if pos_bola else 99.0
-                if cursor_usuario is not None and dist_meu_cursor < 22.0:
+                if cursor_usuario is not None and dist_meu_cursor < 22.0 and dist_meu_bola <= dist_adv_bola + 8.0:
                     posse_instantanea = True
-                elif pos_bola is not None and dist_meu_bola <= dist_adv_bola + 4.0:
+                elif pos_bola is not None and dist_meu_bola <= dist_adv_bola + 3.5:
                     posse_instantanea = True
+                elif cursor_usuario is not None or pos_bola is not None:
+                    posse_instantanea = False
                 else:
-                    posse_instantanea = (dist_meu_cursor < 32.0) if cursor_usuario else True
+                    # Se tanto o cursor quanto a bola sofrerem oclusão momentânea, preserva o estado estável anterior
+                    posse_instantanea = posse_estavel
                 # Histerese Anti-Flicker (4 frames = ~65ms) para evitar corte de LT em divididas
                 if posse_instantanea != posse_estavel:
                     contador_histerese_posse += 1
@@ -2672,7 +2683,7 @@ class InterfaceMestre:
         topo = tk.Frame(self.root, bg="#121220", pady=8)
         topo.pack(fill="x")
         tk.Label(
-            topo, text="⚡ EFOOTBALL MASTER AI & CONTROLLER HUB V2.3",
+            topo, text="⚡ EFOOTBALL MASTER AI & CONTROLLER HUB V3.3 ELITE",
             font=("Segoe UI", 12, "bold"), fg="#00ffcc", bg="#121220"
         ).pack()
         tk.Label(
@@ -2957,12 +2968,21 @@ class InterfaceMestre:
             self.estado.config["overlay_ingame"] = bool(self.var_overlay.get())
             self.estado.salvar_config()
     def capturar_tecla(self, chave):
-        self.botoes_teclas[chave].configure(text="Aperte tecla...", bg="#ffaa00", fg="#000")
+        self.botoes_teclas[chave].configure(text="Tecla ou M1-M4...", bg="#ffaa00", fg="#000")
+
         def _aguardar():
-            ev = keyboard.read_event(suppress=False)
-            while ev.event_type != keyboard.KEY_DOWN:
-                ev = keyboard.read_event(suppress=False)
-            nome = ev.name.lower()
+            _ultima_tecla[0] = ""
+            t0 = time.perf_counter()
+            nome = ""
+            # Escuta simultaneamente botões nativos do Vader 4 Pro (vader_c, vader_z, vader_m1..m4) e teclas do teclado
+            while (time.perf_counter() - t0) < 8.0 and self.estado.rodando:
+                cand = _ultima_tecla[0]
+                if cand:
+                    nome = cand.lower()
+                    break
+                time.sleep(0.015)
+            if not nome:
+                nome = self.estado.config["hotkeys"].get(chave, "5")
             if nome.startswith("num ") and len(nome) == 5:
                 nome = nome[-1]
             with self.estado.lock:
@@ -2971,6 +2991,7 @@ class InterfaceMestre:
             self.root.after(0, lambda: self.botoes_teclas[chave].configure(
                 text=f"[ {nome.upper()} ]", bg="#1a1a2e", fg="#00ffcc"
             ))
+
         threading.Thread(target=_aguardar, daemon=True).start()
     def zerar_estatisticas(self):
         self.estado.telemetria.zerar()

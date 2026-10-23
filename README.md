@@ -1,73 +1,51 @@
-# ⚽ eFootball Tactical AI & Controller Hub (V2.2 xG)
+# ⚽ eFootball Master AI & Controller Hub (V3.3 Elite Dual-Mode)
 
-Sistema avançado de assistência tática em tempo real para **eFootball (PC)** combinando **Visão Computacional a 60 FPS (MSS + OpenCV)**, **Modelagem Cinemática & Balística Anisotrópica ($105\text{m} \times 68\text{m}$)**, **Motor de Expected Goals (xG)** e integração de hardware de ultra-baixa latência (**Flydigi Vader 4 Pro + RP2040 Bridge a 1000Hz**).
-
----
-
-## 🌟 Principais Funcionalidades (V2.2)
-
-### 1. ⚽ Finalização Inteligente Baseada em Expected Goals (xG)
-- **Modelo Estatístico de xG Logístico em Tempo Real**:
-  $$\text{xG} = \frac{1}{1 + e^{-z}} \times 100\%$$
-  $$z = 2.45 \cdot \theta - 0.082 \cdot d_{\text{gol}} - 0.40 \cdot N_{\text{bloqueio}} + 0.90 \cdot \left(\frac{\delta_{\text{gk}}}{3.0}\right) - 0.25$$
-  - $\theta$: Ângulo de visão aberto para a baliza (radianos).
-  - $d_{\text{gol}}$: Distância euclidiana eu e o centro do gol (escala real 105m x 68m).
-  - $N_{\text{bloqueio}}$: Zagueiros interceptando a linha do chute (cone com largura de bloqueio de 1.85m).
-  - $\delta_{\text{gk}}$: Adiantamento do goleiro além da linha de fundo.
-- **Mira 360° no Canto Descoberto (Contra-Pé do Goleiro)**:
-  - Baliza oficial IFAB ($7.32$m) com margem de segurança interna de $1.1$m das traves.
-  - Detecta o quadrante do goleiro e projeta o vetor analógico 360° no poste descoberto.
-- **Seleção Dinâmica de Modalidade de Chute**:
-  - **Cavadinha (`LB + X` / `Q + A`)**: Quando o goleiro sai da linha ($\ge 3.8$m) em distâncias entre 6m e 22m ($135$ms a $175$ms).
-  - **Chute Colocado (`RB + X` / `C + A`)**: Em ângulo aberto com offset diagonal ($\ge 3.5$m) entre 12m e 24m ($160$ms a $210$ms).
-  - **Chute Fenomenal / Stunner (`RT + X` / `E + A`)**: Com corredor limpo à frente ($\ge 2.4$m) de média distância entre 20m e 32m ($225$ms a $265$ms).
-  - **Rasteiro Seco (`X` / `A`)**: Cara a cara na grande área ou sob pressão imediata de zagueiros ($110$ms a $145$ms).
-- **Curva de Barra Calibrada com Hard Cap Anti-Isolada**:
-  - Teto rígido em $265$ms de carregamento, garantindo que a bola nunca passe por cima do travessão.
-- **Gatilho Inteligente Duplo**:
-  - **Gamepad**: Disparado pelo botão **X** nativo do controle quando no ataque ($d \le 36$m) com posse de bola. Na defesa ou meio-campo sem posse, o botão **X** opera nativamente para divididas e desarmes manuais.
-  - **Teclado**: Disparado pela hotkey configurável (padrão Tecla `4`).
+Sistema integrado de assistência tática em tempo real para **eFootball (PC — Steam / Microsoft Store)** combinando **Visão Computacional a 60 FPS (MSS + OpenCV)**, **Cinemática Dupla Anisotrópica ($105\text{m} \times 68\text{m}$)**, **Motor de Reposição Defensiva & Sombra Anti-Tabela (1-2)**, **Expected Goals (xG)** e leitura direta de hardware **Flydigi Vader 4 Pro (Dongle 2.4GHz + Cabo USB Hot-Plug a 1000Hz)** + **RP2040 Bridge**.
 
 ---
 
-### 2. 🎯 Lançamento em Profundidade Teleguiado 360° (`Y` / `W`)
-- **Escala Anisotrópica Oficial FIFA/IFAB ($105\text{m} \times 68\text{m}$)**: Converte independentemente os eixos horizontal e vertical do radar para metros reais, eliminando distorções angulares em viradas de jogo e passes diagonais.
-- **Rastreamento Cinemático Global ($\alpha=0.60$) & Desaglutinação por Distance Transform**:
-  - Associação global por menor distância preditiva (*Global Nearest Neighbor*), impedindo que jogadores troquem de ID ao se cruzarem.
-  - Subdivisão morfológica com `cv2.distanceTransform` para isolar de 2 a 6 atletas aglutinados na pequena área em escanteios.
-- **Interceptação Quadrática de Bhaskara em 2 Estágios**:
-  - Resolve analiticamente $A(t^*)^2 + B t^* + C = 0$ usando a velocidade balística específica de cada tipo de passe (`RASTEIRO`, `CAVADO_ARCO` ou `FENOMENAL_CURVA`).
-- **Ponderação de Alinhamento Corporal (Contra-Pé) & Modo Desafogo Rápido**:
-  - Memoriza a última orientação corporal do portador da bola, bonificando passes a favor do movimento (`+15.0`) e penalizando giros cegos de 180° (`-20.0`).
-  - **Quick-Release (< 1.9m)**: Quando pressionado de perto por um marcador, cancela animações longas (`RT`) e solta o passe rapidamente antes do desarme.
-- **Filtro Anti-Impedimento Oficial IFAB (Lei 11)**:
-  - Respeita a linha de meio-campo e compensa automaticamente a oclusão do goleiro sobre a linha de fundo do radar.
+## 🌟 Principais Funcionalidades da Versão V3.3 Elite
+
+### 1. 🛡️ Motor de Reposição Defensiva & Marcação Anti-Tabela (1-2)
+- **Rastreamento Cinemático Duplo (`kinematic_tracker_adv`)**: Calcula em tempo real o vetor de velocidade $(v_x, v_y)$ em metros por segundo de todos os atacantes adversários e mantém histórico de $1.85\text{s}$ dos portadores da bola rivais para identificar tabelas (*Pass & Run* / 1-2).
+- **Geometria de Sombra de Cobertura (*Cover Shadow* via Bhaskara)**:
+  - Quando um adversário toca a bola e dispara em profundidade ($v_{\text{ataque}} \ge 2.1\text{ m/s}$), o sistema resolve a equação quadrática de interceptação para localizar o ponto futuro de devolução ($P_{\text{dev}}$).
+  - Posiciona o seu marcador no Ponto de Sombra ($P_{\text{sombra}}$) sobre a bissetriz do passe (entre $38\%$ e $75\%$ da trajetória, com margem Goal-Side de $0.9\text{m}$), mudando o indicador visual para `SOMBRA OK!` assim que o corredor da tabela está fechado ($\le 1.45\text{m}$).
+- **Recomposição em Funil Defensivo (Goal-Side)**:
+  - Se o seu defensor estiver batido atrás da linha da bola, projeta uma diagonal de retorno acelerado (`RT`) $5.0\text{m}$ à frente do portador rival, puxando $25\%$ para o eixo central para proteger a entrada da área.
+- **Override Manual Suave (Blend $70\%$ Mão / $30\%$ IA)**:
+  - Se você segurar o gatilho de defesa mas empurrar fortemente o analógico físico ($> 78\%$) em direção divergente para dar um bote manual, o sistema cede prioridade imediata à sua mão.
 
 ---
 
-### 3. ⚡ Central Inteligente de Cruzamentos (1ª Trave, 2ª Trave, Meia-Lua)
-- Analisa a movimentação dos atacantes na área e o posicionamento dos defensores:
-  - **RASTEIRO (`D + D` duplo toque sincronizado)**: Atacante livre próximo à pequena área ou infiltrando na meia-lua.
-  - **CABEÇA / PEITO (`D` com parábola)**: Bola colocada na 1ª ou 2ª trave.
-  - **BALÃO ALTO / ANTECIPADO (`LB + D` / `Q + D`)**: Encobre o primeiro zagueiro quando o corredor rasteiro está bloqueado.
-  - **FENOMENAL (`RT + D` / `E + D`)**: Cruzamento tenso e rápido de longa distância (> 34m) sem bloqueio frontal.
+### 2. ⚡ Acesso Direto Dual-Mode ao Flydigi Vader 4 Pro (Dongle 2.4GHz + Cabo USB)
+- **Leitura `XInputGetState` em 5 Microssegundos (1000Hz Real)**: Lê diretamente os analógicos Hall Effect em 16-bit (-32768 a +32767, zona morta de $3.5\%$) e os gatilhos LT/RT em 8-bit (0 a 255) sem passar pela fila de eventos SDL.
+- **Transição Hot-Plug Automática (Dongle $\leftrightarrow$ Cabo)**: Monitora os VIDs `0x04B4` e `0x37D7` e varre automaticamente os slots XInput 0..3 caso você conecte ou desconecte o cabo USB durante a partida.
+- **Gatilho LT de 2 Estágios**:
+  - **Estágio 1 (LT entre $20\%$ e $70\%$)**: Contenção manual livre (*Match-up*).
+  - **Estágio 2 (LT $\ge 72\%$ ou trava Micro-Switch traseira)**: Ativa a guiagem automática 360° para a Sombra da Tabela 1-2 ou Funil de Recomposição.
+- **Leitura Nativa dos 6 Botões Extras (C, Z, M1, M2, M3, M4)**: Suporte via canal secundário `hidapi` (Raw HID) e fallback de teclas do Flydigi Space Station.
 
 ---
 
-### 4. ⚙️ Máquina de Estados Não-Bloqueante a 1000Hz (`timeBeginPeriod(1)`)
-- **Zero Freeze do Controle**: Nenhuma ação usa `time.sleep` bloqueante na thread de input. Todos os eventos de teclado DirectX (`SendInput` 64-bit) e bits da ponte serial RP2040 são chaveados bit-a-bit por timestamps de alta precisão (`time.perf_counter()`).
-- **Máscara Anti-Bleedthrough**: Durante a execução assíncrona, a IA mascara a leitura dos botões físicos no gamepad para evitar que botões mantidos pressionados manualmente vazem após a liberação da barra.
+### 3. 🎯 Lançamento Balístico 360° (PA1/PA2 vs PA3/Manual) & Finalização xG
+- **Isolamento Puro RP2040**: Quando a placa RP2040 está conectada, os disparos usam 100% os botões e eixos do gamepad virtual (sem enviar teclas DirectX simultâneas), impedindo que a engine do eFootball perca o ângulo 360° da mira.
+- **Histerese Anti-Flicker de Posse (4 frames / ~65ms) & Inércia da Bola**: Mantém a estabilidade do estado de ataque/defesa mesmo quando a bola sofre oclusão sob ícones de jogadores no radar.
 
 ---
 
-## 🎮 Mapeamento de Comandos
+## 🎮 Tabela de Comandos e Gatilhos Táticos
 
-| Comando | Controle (Flydigi Vader 4 Pro) | Teclado | Ação Realizada |
+| Ação Tática | Botão Nativo Vader 4 Pro | Teclado / Controle Padrão | Comportamento no Jogo |
 | :--- | :--- | :--- | :--- |
-| **Finalização xG IA** | Botão **X** (No Ataque com Posse) | Tecla `4` | Mira 360° no canto descoberto com xG (`A`, `LB+A`, `RB+A` ou `RT+A`) |
-| **Lançamento IA** | Botão **Z** (Macro Space Station) | Tecla `5` | Lançamento balístico teleguiado 360° (`W`, `LB+W` ou `RT+W`) |
-| **Cruzamento IA** | Botão **C** (Macro Space Station) | Tecla `6` | Cruzamento tático setorial 1ª/2ª trave (`D`, `D+D`, `LB+D` ou `RT+D`) |
-| **Inverter Time** | Teclado / Macro | Tecla `F10` | Alterna entre Mandante (Verde) e Visitante (Vermelho) e salva no JSON |
+| **Finalização Inteligente xG** | Botão Frontal **C** | Tecla `4` ou Botão **X** (no ataque) | Mira 360° no canto descoberto do goleiro (`X`, `LB+X`, `RB+X` ou `RT+X`). |
+| **Lançamento Tático / Facão** | Botão Traseiro **M1** | Tecla `5` ou `LB + Y` | Passe em profundidade teleguiado 360° com Bhaskara (`Y`, `LB+Y` ou `RT+Y`). |
+| **Passe Curto Mirado** | Botão **Y** Simples | Botão **Y** (sem LB) | Lançamento curto e rasteiro ($115\text{ms}$–$170\text{ms}$) no companheiro apontado pelo analógico. |
+| **Cruzamento Inteligente IA** | Botão Frontal **Z** | Tecla `6` ou Botão **B** (na área) | Cruzamento setorial 1ª/2ª trave ou meia-lua (`D`, `D+D`, `LB+D` ou `RT+D`). |
+| **Reposição & Sombra 1-2** | Botão Traseiro **M2** | Tecla `7` ou `LT` Fundo ($\ge 72\%$) | Guia o marcador para fechar a tabela 1-2 (`SOMBRA_TABELA`) ou recompor o funil (`RT/LT`). |
+| **Troca de Cursor Anti-Tabela** | Botão Traseiro **M3** | Automático (opcional na GUI) | Pulso direcionado em `LB` apontando para o zagueiro que cobre o corredor da tabela. |
+| **Inverter Cor do Time** | Macro / Teclado | Tecla `F10` | Alterna entre Mandante (VERDE) e Visitante (VERMELHO) e salva no JSON. |
+| **Ocultar / Exibir HUD** | Macro / Teclado | Tecla `F11` | Liga ou desliga o Overlay Flutuante transparente in-game. |
 
 ---
 
@@ -82,17 +60,3 @@ Sistema avançado de assistência tática em tempo real para **eFootball (PC)** 
    ```powershell
    python efootball_mestre.py
    ```
-
-3. Uma janela OpenCV com zoom 3x do radar exibirá o rastreamento tático, alvos de passe, cone de bloqueio e finalização xG em tempo real. Pressione `ESC` para encerrar.
-
----
-
-## 📁 Estrutura do Repositório
-
-```text
-├── efootball_mestre.py    # Sistema completo V2.2: Visão Computacional, xG, balística, injeção DirectX e RP2040
-├── config_visao.json      # Configurações de ROI do radar, hotkeys e toggles
-├── firmware/              # Firmware CircuitPython UF2 para Raspberry Pi Pico RP2040 (1000Hz)
-├── requirements.txt       # Dependências Python
-└── README.md              # Documentação completa
-```
