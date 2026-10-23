@@ -24,12 +24,12 @@
     "usar_mira_automatica_360": true,
     "modo_desafogo_pressao": true,
     "usar_finalizacao_inteligente": true,
-    "auto_disparo_facao": false,
+    "auto_disparo_facao": true,
     "rumble_alerta_facao": true,
     "usar_defesa_inteligente": true,
     "auto_contencao_tabela": true,
     "auto_cursor_antitabela": true,
-    "perfil_assistencia": "PA3_MANUAL",
+    "perfil_assistencia": "PA1_PA2",
     "feedback_haptico": true,
     "overlay_ingame": true
 }

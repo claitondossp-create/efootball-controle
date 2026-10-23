@@ -404,6 +404,10 @@ RP_BTN_BACK  = 8  # Botão 8 -> Back / Select
 RP_BTN_START = 9  # Botão 9 -> Start / Menu
 RP_BTN_LS = 10  # Botão 10 -> L3 (Clique Analógico Esquerdo)
 RP_BTN_RS = 11  # Botão 11 -> R3 (Clique Analógico Direito)
+RP_BTN_DPAD_UP    = 12  # Botão 12 (Bit 12) -> D-pad UP (Aumenta Nível Ofensivo / Sair da Retranca)
+RP_BTN_DPAD_DOWN  = 13  # Botão 13 (Bit 13) -> D-pad DOWN (Diminui Nível / Retranca)
+RP_BTN_DPAD_LEFT  = 14  # Botão 14 (Bit 14) -> D-pad LEFT
+RP_BTN_DPAD_RIGHT = 15  # Botão 15 (Bit 15) -> D-pad RIGHT
 # Índices de leitura do controle físico Flydigi Vader 4 Pro no Pygame (Padrão XInput):
 VADER_BTN_A  = 0
 VADER_BTN_B  = 1
@@ -417,7 +421,7 @@ VADER_BTN_LS = 8
 VADER_BTN_RS = 9
 # Tradução automática de Scancode -> Bit exato do CircuitPython HID (RP2040)
 SCANCODE_TO_RP2040_BTN = {
-    SCAN_A: (1 << RP_BTN_X),   # Chuto -> Botão 0
+    SCAN_A: (1 << RP_BTN_X),   # Chute -> Botão 0
     SCAN_S: (1 << RP_BTN_A),   # Passe -> Botão 1
     SCAN_D: (1 << RP_BTN_B),   # Cruzamento -> Botão 2
     SCAN_W: (1 << RP_BTN_Y),   # Lançamento -> Botão 3
@@ -425,6 +429,10 @@ SCANCODE_TO_RP2040_BTN = {
     SCAN_C: (1 << RP_BTN_RB),  # Colocado (RB) -> Botão 5
     SCAN_Z: (1 << RP_BTN_LT),  # Manual (LT) -> Botão 6
     SCAN_E: (1 << RP_BTN_RT),  # Fenomenal (RT) -> Botão 7
+    SCAN_UP:    (1 << RP_BTN_DPAD_UP),
+    SCAN_DOWN:  (1 << RP_BTN_DPAD_DOWN),
+    SCAN_LEFT:  (1 << RP_BTN_DPAD_LEFT),
+    SCAN_RIGHT: (1 << RP_BTN_DPAD_RIGHT),
 }
 _ignorando_hook = False
 def directx_press(scancode):
@@ -459,11 +467,13 @@ def directx_release(scancode):
         pass
     finally:
         _ignorando_hook = False
-def directx_liberar_tudo():
+def directx_liberar_tudo(liberar_direcionais=True):
     """Garante que nenhuma tecla de ação ou direção fique presa no Windows."""
-    for sc in (SCAN_W, SCAN_D, SCAN_A, SCAN_S, SCAN_Q, SCAN_E, SCAN_C, SCAN_Z,
-               SCAN_UP, SCAN_DOWN, SCAN_LEFT, SCAN_RIGHT):
+    for sc in (SCAN_W, SCAN_D, SCAN_A, SCAN_S, SCAN_Q, SCAN_E, SCAN_C, SCAN_Z):
         directx_release(sc)
+    if liberar_direcionais:
+        for sc in (SCAN_UP, SCAN_DOWN, SCAN_LEFT, SCAN_RIGHT):
+            directx_release(sc)
 def obter_scancodes_direcao(dx, dy):
     """Converte um vetor (dx, dy) nas teclas direcionais (8 direções) do teclado."""
     norm = math.hypot(dx, dy)
@@ -1797,7 +1807,7 @@ class ExecutorAcaoAssincrono:
     def agendar_sequencia(self, etapas_dx, duracao_botoes_s, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=True):
         agora = time.perf_counter()
         with self.lock:
-            directx_liberar_tudo()
+            directx_liberar_tudo(liberar_direcionais=False)
             self.eventos_dx.clear()
             self.ativo = True
             self.rp2040_ativo = rp2040_ativo
@@ -1838,7 +1848,9 @@ class ExecutorAcaoAssincrono:
                 elif fn == directx_release:
                     self.override_btns &= ~bit_rp
             if agora >= self.fim_acao_ts and not self.eventos_dx:
-                directx_liberar_tudo()
+                directx_liberar_tudo(liberar_direcionais=False)
+                for sc_dir in self.teclas_direcao_ativas:
+                    directx_release(sc_dir)
                 self.ativo = False
                 self.override_lx = None
                 self.override_ly = None
@@ -1978,6 +1990,10 @@ def thread_controle_execucao(estado: EstadoSistema):
     ant_btn_b = False
     ant_chute_key = False
     ant_btn_x = False
+    ant_dpad_up = False
+    ant_dpad_down = False
+    ant_dpad_left = False
+    ant_dpad_right = False
     xinput_direto_logado = False
     while estado.rodando:
         try:
@@ -2008,6 +2024,10 @@ def thread_controle_execucao(estado: EstadoSistema):
                 press_btn_start = bool(w_btns & XINPUT_GAMEPAD_START)
                 press_btn_ls    = bool(w_btns & XINPUT_GAMEPAD_LEFT_THUMB)
                 press_btn_rs    = bool(w_btns & XINPUT_GAMEPAD_RIGHT_THUMB)
+                press_dpad_up    = bool(w_btns & XINPUT_GAMEPAD_DPAD_UP)
+                press_dpad_down  = bool(w_btns & XINPUT_GAMEPAD_DPAD_DOWN)
+                press_dpad_left  = bool(w_btns & XINPUT_GAMEPAD_DPAD_LEFT)
+                press_dpad_right = bool(w_btns & XINPUT_GAMEPAD_DPAD_RIGHT)
                 lt_norm         = xi["lt_norm"]
                 rt_norm         = xi["rt_norm"]
                 with estado.lock:
@@ -2036,6 +2056,11 @@ def thread_controle_execucao(estado: EstadoSistema):
                 press_btn_start = vader.get_button(VADER_BTN_START) if vader else False
                 press_btn_ls    = vader.get_button(VADER_BTN_LS) if vader else False
                 press_btn_rs    = vader.get_button(VADER_BTN_RS) if vader else False
+                hat             = vader.get_hat(0) if (vader and vader.get_numhats() > 0) else (0, 0)
+                press_dpad_up    = (hat[1] > 0)
+                press_dpad_down  = (hat[1] < 0)
+                press_dpad_left  = (hat[0] < 0)
+                press_dpad_right = (hat[0] > 0)
                 lt_norm         = max(0.0, vader.get_axis(4)) if (vader and vader.get_numaxes() >= 5) else 0.0
                 rt_norm         = max(0.0, vader.get_axis(5)) if (vader and vader.get_numaxes() >= 6) else 0.0
             # Leitura rápida de estado sem deepcopy desnecessário a 1000Hz
@@ -2236,6 +2261,38 @@ def thread_controle_execucao(estado: EstadoSistema):
                 and (press_def_key or (auto_contencao_lt and lt_estagio_ia))
             )
             # --- 5. ATUALIZA MÁQUINA DE ESTADOS E PASSTHROUGH RP2040 / DIRECTX ---
+            # Sincronização nativa DirectX do D-Pad (Seta Para Cima / Baixo / Esq / Dir) com edge-trigger
+            dpad_fisico_ativo = (press_dpad_up or press_dpad_down or press_dpad_left or press_dpad_right)
+            if press_dpad_up != ant_dpad_up:
+                if press_dpad_up:
+                    directx_press(SCAN_UP)
+                    print("\n[D-PAD] ⬆️ CIMA (Mentalidade Ofensiva / Sair da Retranca)")
+                else:
+                    directx_release(SCAN_UP)
+                ant_dpad_up = press_dpad_up
+
+            if press_dpad_down != ant_dpad_down:
+                if press_dpad_down:
+                    directx_press(SCAN_DOWN)
+                    print("\n[D-PAD] ⬇️ BAIXO (Mentalidade Defensiva / Retranca)")
+                else:
+                    directx_release(SCAN_DOWN)
+                ant_dpad_down = press_dpad_down
+
+            if press_dpad_left != ant_dpad_left:
+                if press_dpad_left:
+                    directx_press(SCAN_LEFT)
+                else:
+                    directx_release(SCAN_LEFT)
+                ant_dpad_left = press_dpad_left
+
+            if press_dpad_right != ant_dpad_right:
+                if press_dpad_right:
+                    directx_press(SCAN_RIGHT)
+                else:
+                    directx_release(SCAN_RIGHT)
+                ant_dpad_right = press_dpad_right
+
             em_acao, ov_btns, ov_lx, ov_ly = executor.atualizar()
             def_override_lx = None
             def_override_ly = None
@@ -2263,11 +2320,13 @@ def thread_controle_execucao(estado: EstadoSistema):
                     print(f"\n[DEFESA IA] 🛡️ {ddef['tag_hud']} | Dist Alvo={ddef['dist_ate_alvo_m']:.1f}m | Sprint={def_usar_sprint} | MatchUp(LT)={def_usar_matchup}")
                 if not estado.rp2040_conectado:
                     defesa_dx_ativa = True
-                    for sc_d in (SCAN_UP, SCAN_DOWN, SCAN_LEFT, SCAN_RIGHT):
-                        directx_release(sc_d)
-                    if math.hypot(def_override_lx, def_override_ly) > 0.20:
-                        for sc_d in obter_scancodes_direcao(def_override_lx, def_override_ly):
-                            directx_press(sc_d)
+                    # Só injeta setas se o usuário não estiver acionando o D-pad no controle:
+                    if not dpad_fisico_ativo:
+                        for sc_d in (SCAN_UP, SCAN_DOWN, SCAN_LEFT, SCAN_RIGHT):
+                            directx_release(sc_d)
+                        if math.hypot(def_override_lx, def_override_ly) > 0.20:
+                            for sc_d in obter_scancodes_direcao(def_override_lx, def_override_ly):
+                                directx_press(sc_d)
                     if def_usar_matchup:
                         directx_press(SCAN_Z)
                     else:
@@ -2278,7 +2337,12 @@ def thread_controle_execucao(estado: EstadoSistema):
                         directx_release(SCAN_E)
             elif defesa_dx_ativa and not em_acao:
                 defesa_dx_ativa = False
-                for sc_d in (SCAN_UP, SCAN_DOWN, SCAN_LEFT, SCAN_RIGHT, SCAN_Z, SCAN_E):
+                chaves_soltar = [SCAN_Z, SCAN_E]
+                if not press_dpad_up:    chaves_soltar.append(SCAN_UP)
+                if not press_dpad_down:  chaves_soltar.append(SCAN_DOWN)
+                if not press_dpad_left:  chaves_soltar.append(SCAN_LEFT)
+                if not press_dpad_right: chaves_soltar.append(SCAN_RIGHT)
+                for sc_d in chaves_soltar:
                     directx_release(sc_d)
             if ser and ser.is_open:
                 buttons = 0
@@ -2294,6 +2358,10 @@ def thread_controle_execucao(estado: EstadoSistema):
                 if press_btn_rs:    buttons |= (1 << RP_BTN_RS)     # Botão 11
                 if lt_norm > 0.20:  buttons |= (1 << RP_BTN_LT)     # Botão 6 (LT)
                 if rt_norm > 0.20:  buttons |= (1 << RP_BTN_RT)     # Botão 7 (RT)
+                if press_dpad_up:    buttons |= (1 << RP_BTN_DPAD_UP)    # Botão 12 (D-pad UP)
+                if press_dpad_down:  buttons |= (1 << RP_BTN_DPAD_DOWN)  # Botão 13 (D-pad DOWN)
+                if press_dpad_left:  buttons |= (1 << RP_BTN_DPAD_LEFT)  # Botão 14 (D-pad LEFT)
+                if press_dpad_right: buttons |= (1 << RP_BTN_DPAD_RIGHT) # Botão 15 (D-pad RIGHT)
                 if em_acao:
                     # Durante o passe/cruzamento/chute da IA:
                     # 1. Limpa os botões de ação física (incluindo RT de corrida) para não conflitar com o comando da IA
