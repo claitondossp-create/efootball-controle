@@ -24,10 +24,10 @@
         "toggle_overlay": "f11"
     },
     "modo_cor_time": "GRE_AUTO",
-    "usar_mira_automatica_360": true,
+    "usar_mira_automatica_360": false,
     "auto_avanco_ataque": true,
     "modo_desafogo_pressao": true,
-    "usar_finalizacao_inteligente": false,
+    "usar_finalizacao_inteligente": true,
     "auto_disparo_facao": false,
     "rumble_alerta_facao": false,
     "usar_defesa_inteligente": false,

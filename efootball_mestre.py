@@ -82,8 +82,8 @@ KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_SCANCODE = 0x0008
 # Scancodes de hardware DirectX (Padrão Oficial eFootball PC):
 SCAN_W = 0x11     # Lançamento em Profundidade (Through Ball / Botão Y / Tecla W)
-SCAN_D = 0x20     # Cruzamento / Passe Longo (Lofted Pass / Botão B / Tecla D)
-SCAN_A = 0x1E     # Chute / Finalização (Shoot / Botão X / Tecla A)
+SCAN_A = 0x1E     # Cruzamento / Passe Longo (Lofted Pass / Botão B / Tecla A)
+SCAN_D = 0x20     # Chute / Finalização (Shoot / Botão X / Tecla D)
 SCAN_S = 0x1F     # Passe Curto (Short Pass / Botão A / Tecla S)
 SCAN_Q = 0x10     # Troca de Cursor / Modificador Cavado (Botão LB / L1)
 SCAN_E = 0x12     # Sprint / Passe Fenomenal (Botão RT / R2)
@@ -244,10 +244,7 @@ class LeitorDiretoVader4Pro:
                         serial_s = (d.get("serial_number") or "").lower()
                         
                         eh_vader = (
-                            "vader" in prod or
-                            "flydigi" in prod or
-                            vid in FLYDIGI_VIDS or
-                            (vid == 0x045E and pid == 654 and ("vader" in prod or "flydigi" in prod))
+                            vid in FLYDIGI_VIDS and ("vader" in prod or "flydigi" in prod or up >= 0xFF00)
                         )
                         if not eh_vader:
                             continue
@@ -426,9 +423,9 @@ VADER_BTN_LS = 8
 VADER_BTN_RS = 9
 # Tradução automática de Scancode -> Bit exato do CircuitPython HID (RP2040)
 SCANCODE_TO_RP2040_BTN = {
-    SCAN_A: (1 << RP_BTN_X),   # Chute (A) -> Botão X (Bit 0)
     SCAN_S: (1 << RP_BTN_A),   # Passe Curto (S) -> Botão A (Bit 1)
-    SCAN_D: (1 << RP_BTN_B),   # Cruzamento (D) -> Botão B (Bit 2)
+    SCAN_A: (1 << RP_BTN_B),   # Cruzamento / Passe Longo (A) -> Botão B (Bit 2)
+    SCAN_D: (1 << RP_BTN_X),   # Chute (D) -> Botão X (Bit 0)
     SCAN_W: (1 << RP_BTN_Y),   # Lançamento (W) -> Botão Y (Bit 3)
     SCAN_Q: (1 << RP_BTN_LB),  # Cavada (LB) -> Botão 4
     SCAN_C: (1 << RP_BTN_RB),  # Colocado (RB) -> Botão 5
@@ -1848,9 +1845,9 @@ class ExecutorAcaoAssincrono:
                 return False, 0, None, None
             while self.eventos_dx and agora >= self.eventos_dx[0][0]:
                 _, fn, sc = self.eventos_dx.pop(0)
-                # Dispara SEMPRE o botão de ação no DirectX (SCAN_W, SCAN_D, SCAN_A, etc.)
-                # para garantir que o passe/cruzamento/chute nunca falhe tanto no teclado/XInput quanto no Gamepad!
-                fn(sc)
+                # Dispara o botão de ação no DirectX apenas se o RP2040 não estiver ativo (modo teclado fallback)
+                if not self.rp2040_ativo:
+                    fn(sc)
                 # E sincroniza os bits para o RP2040 simultaneamente:
                 bit_rp = SCANCODE_TO_RP2040_BTN.get(sc, 0)
                 if fn == directx_press:
@@ -1858,9 +1855,10 @@ class ExecutorAcaoAssincrono:
                 elif fn == directx_release:
                     self.override_btns &= ~bit_rp
             if agora >= self.fim_acao_ts and not self.eventos_dx:
-                directx_liberar_tudo(liberar_direcionais=False)
-                for sc_dir in self.teclas_direcao_ativas:
-                    directx_release(sc_dir)
+                if not self.rp2040_ativo:
+                    directx_liberar_tudo(liberar_direcionais=False)
+                    for sc_dir in self.teclas_direcao_ativas:
+                        directx_release(sc_dir)
                 self.ativo = False
                 self.override_lx = None
                 self.override_ly = None
@@ -2192,7 +2190,7 @@ def _disparar_lancamento_ia(dp, usar_mira_360, injetar_setas_dx, estado, executo
     aereo = dp.get("aereo", False)
     tipo_p = dp.get("tipo_passe", "RASTEIRO")
     dist_m = dp.get("dist_metros", 20.0)
-    vetor_dir = dp.get("vetor_direcao")
+    vetor_dir = dp.get("vetor_direcao") if usar_mira_360 else None
     estado.telemetria.registrar_disparo(dp, tempo_sec * 1000.0, aereo)
     ang_graus = math.degrees(math.atan2(vetor_dir[1], vetor_dir[0])) if vetor_dir else 0.0
     rp_ativo = estado.rp2040_conectado
@@ -2448,10 +2446,10 @@ def thread_controle_execucao(estado: EstadoSistema):
                     tempo_sec = max(0.095, min(0.350, dc["tempo_ms"] / 1000.0))
                     vetor_dir = dc.get("vetor_direcao") if usar_mira_360 else None
                     print(f"\n[DISPARO] ⚡ Cruzamento B Inteligente: {tag} ({setor}) | Dist={dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms")
-                    executor.agendar_combo(SCAN_D, tempo_sec, sc_modificador=None, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
+                    executor.agendar_combo(SCAN_A, tempo_sec, sc_modificador=None, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
                 else:
-                    print("\n[DISPARO] ⚡ Cruzamento Manual B (Sem alvo na área) -> D (170ms)")
-                    executor.agendar_combo(SCAN_D, 0.170, sc_modificador=None, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=estado.rp2040_conectado)
+                    print("\n[DISPARO] ⚡ Cruzamento Manual B (Sem alvo na área) -> A (170ms)")
+                    executor.agendar_combo(SCAN_A, 0.170, sc_modificador=None, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=estado.rp2040_conectado)
             ant_cruz = press_cruz
             ant_btn_b = press_btn_b
 
@@ -2504,10 +2502,10 @@ def thread_controle_execucao(estado: EstadoSistema):
                     dist_m = dch.get("dist_gol_m", 0.0)
                     canto = dch.get("canto_nome", "GOL")
                     print(f"\n[CHUTE IA] ⚽ {tag} ({canto}) | xG={xg:.0f}% | Dist={dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms")
-                    executor.agendar_combo(SCAN_A, tempo_sec, sc_modificador=mod, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
+                    executor.agendar_combo(SCAN_D, tempo_sec, sc_modificador=mod, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
                 else:
-                    print("\n[CHUTE] ⚽ Chute Rápido (Sem mira xG ativa) -> A (135ms)")
-                    executor.agendar_combo(SCAN_A, 0.135, sc_modificador=None, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=estado.rp2040_conectado)
+                    print("\n[CHUTE] ⚽ Chute Rápido (Sem mira xG ativa) -> D (135ms)")
+                    executor.agendar_combo(SCAN_D, 0.135, sc_modificador=None, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=estado.rp2040_conectado)
             ant_chute_key = press_chute_key
             ant_btn_x = press_btn_x
 
