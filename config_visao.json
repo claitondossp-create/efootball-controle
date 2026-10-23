@@ -5,6 +5,13 @@
         "width": 260,
         "height": 130
     },
+    "placar_roi": {
+        "top": 25,
+        "left": 40,
+        "width": 640,
+        "height": 95
+    },
+    "tag_meu_time": "GRE",
     "hotkeys": {
         "chute_ia": "4",
         "lancamento_ia": "5",
@@ -13,11 +20,12 @@
         "inverter_cor_time": "f10",
         "toggle_overlay": "f11"
     },
-    "modo_cor_time": "AUTO",
+    "modo_cor_time": "GRE_AUTO",
     "usar_mira_automatica_360": true,
     "modo_desafogo_pressao": true,
     "usar_finalizacao_inteligente": true,
     "auto_disparo_facao": false,
+    "rumble_alerta_facao": true,
     "usar_defesa_inteligente": true,
     "auto_contencao_tabela": true,
     "auto_cursor_antitabela": true,

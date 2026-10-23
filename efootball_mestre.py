@@ -25,6 +25,7 @@ import math
 import json
 import copy
 import struct
+import base64
 import threading
 import ctypes
 from ctypes import wintypes
@@ -491,8 +492,40 @@ RADAR_ROI_PADRAO = {
     "width": 260,
     "height": 130
 }
+PLACAR_ROI_PADRAO = {
+    "top": 25,
+    "left": 40,
+    "width": 640,
+    "height": 95
+}
+TPL_GRE_BASE64 = (
+    "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"
+    "7nkR9MyC3wJAAAAAElFTkSuQmCC"
+)
 DEFAULT_CONFIG = {
     "radar_roi": RADAR_ROI_PADRAO,
+    "placar_roi": PLACAR_ROI_PADRAO,
+    "tag_meu_time": "GRE",
     "hotkeys": {
         "chute_ia":          "4",
         "lancamento_ia":     "5",
@@ -501,11 +534,12 @@ DEFAULT_CONFIG = {
         "inverter_cor_time": "f10",
         "toggle_overlay":    "f11"
     },
-    "modo_cor_time": "AUTO",
+    "modo_cor_time": "GRE_AUTO",
     "usar_mira_automatica_360": True,
     "modo_desafogo_pressao": True,
     "usar_finalizacao_inteligente": True,
     "auto_disparo_facao": False,
+    "rumble_alerta_facao": True,
     "usar_defesa_inteligente": True,
     "auto_contencao_tabela": True,
     "auto_cursor_antitabela": False,
@@ -1006,36 +1040,9 @@ class RadarPassesEFootball:
                         dist_perp_m = abs(dx_a_m * math.sin(ang_c_m) - dy_a_m * math.cos(ang_c_m))
                         if dist_perp_m < 2.5:
                             bloqueio_trajetoria = True
-            tipo_cruz = "CABEÇA"
-            tag_hud = "CRUZAMENTO D"
-            if no_escanteio:
-                if setor == "2A_TRAVE":
-                    tipo_cruz, tag_hud = "BALAO_ALTO", "ESCANTEIO 2ª TRAVE LB+D"
-                elif setor == "1A_TRAVE":
-                    tipo_cruz, tag_hud = "CABEÇA", "ESCANTEIO 1ª TRAVE D"
-                else:
-                    tipo_cruz, tag_hud = "RASTEIRO", "ESCANTEIO CURTO D+D"
-            elif setor == "1A_TRAVE":
-                if dist_gol_x_m < 14.0 and not bloqueio_frontal and not bloqueio_trajetoria:
-                    tipo_cruz, tag_hud = "RASTEIRO", "1ª TRAVE RASTEIRO D+D"
-                elif dist_fundo_m > 20.0:
-                    tipo_cruz, tag_hud = "ANTECIPADO", "1ª TRAVE ANTECIPADO LB+D"
-                else:
-                    tipo_cruz, tag_hud = "CABEÇA", "1ª TRAVE CABEÇA D"
-            elif setor == "2A_TRAVE":
-                if dist_fundo_m > 22.0:
-                    tipo_cruz, tag_hud = "ANTECIPADO", "2ª TRAVE ANTECIPADO LB+D"
-                elif dist_fundo_m <= 16.0 or bloqueio_trajetoria or bloqueio_frontal:
-                    tipo_cruz, tag_hud = "BALAO_ALTO", "2ª TRAVE BALÃO LB+D"
-                elif dist_cruz_m > 34.0 and not bloqueio_frontal:
-                    tipo_cruz, tag_hud = "FENOMENAL", "2ª TRAVE FENOMENAL RT+D"
-                else:
-                    tipo_cruz, tag_hud = "CABEÇA", "2ª TRAVE CABEÇA D"
-            else:
-                if bloqueio_frontal or bloqueio_trajetoria:
-                    tipo_cruz, tag_hud = "CABEÇA", "MEIA-LUA PELO ALTO D"
-                else:
-                    tipo_cruz, tag_hud = "RASTEIRO", "MEIA-LUA ATRASADO D+D"
+            # Cruzamento Padronizado com Botão B (Sem variações de LB/RT ou duplo toque)
+            tipo_cruz = "PADRAO"
+            tag_hud = f"CRUZAMENTO B ({setor})"
             score = 100.0 - dist_gol_x_m * 1.2 + folga_def_m * 4.5
             if setor == "2A_TRAVE" and not marcado:
                 score += 28.0
@@ -1047,7 +1054,7 @@ class RadarPassesEFootball:
                 score -= 25.0
             if bloqueio_frontal:
                 score -= 10.0
-            forca_c, tempo_c, _ = calcular_forca_balistica(dist_cruz_m, tipo_passe=tipo_cruz)
+            forca_c, tempo_c, _ = calcular_forca_balistica(dist_cruz_m, tipo_passe="AEREO")
             candidatos_cruz.append({
                 "origem": portador,
                 "destino": comp,
@@ -1494,7 +1501,72 @@ def consumir_tecla(*nomes_tecla):
             _teclas_latched.pop(t, None)
             if t.isdigit():
                 _teclas_ativas.discard(f"num {t}")
-                _teclas_latched.pop(f"num {t}", None)
+# ==============================================================================
+# 4. DETECTOR DE PLACAR EM TEMPO REAL (MANDANTE / VISITANTE - GRE GRÊMIO)
+# ==============================================================================
+class DetectorPlacarTime:
+    """
+    Detector de Time e Posição no Placar Superior Esquerdo (eFootball).
+    Detecta automaticamente se 'GRE' (Grêmio) é o 1º time (Mandante) ou 2º time (Visitante).
+    - Slot 1 (x < 250 em ROI 640x95): Mandante -> sou_time_verde = True, atacando_direita = True (1º tempo)
+    - Slot 2 (x >= 250 em ROI 640x95): Visitante -> sou_time_verde = False, atacando_direita = False (1º tempo)
+    """
+    def __init__(self, template_path=None):
+        self.template_gray = None
+        caminho = template_path or os.path.join(BASE_DIR, "gre_template.png")
+        if os.path.exists(caminho):
+            try:
+                tpl = cv2.imread(caminho, cv2.IMREAD_GRAYSCALE)
+                if tpl is not None and tpl.size > 0:
+                    self.template_gray = tpl
+            except Exception:
+                pass
+        if self.template_gray is None:
+            try:
+                raw_bytes = base64.b64decode(TPL_GRE_BASE64)
+                arr = np.frombuffer(raw_bytes, dtype=np.uint8)
+                self.template_gray = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+            except Exception:
+                pass
+        self.ultimo_slot = None
+        self.ultimo_score = 0.0
+
+    def detectar_posicao(self, frame_placar_bgr):
+        if self.template_gray is None or frame_placar_bgr is None:
+            return None, 0.0
+        try:
+            if len(frame_placar_bgr.shape) == 3:
+                gray = cv2.cvtColor(frame_placar_bgr, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = frame_placar_bgr
+            th, tw = self.template_gray.shape[:2]
+            gh, gw = gray.shape[:2]
+            if tw > gw or th > gh:
+                return None, 0.0
+            res = cv2.matchTemplate(gray, self.template_gray, cv2.TM_CCOEFF_NORMED)
+            _, max_v, _, max_l = cv2.minMaxLoc(res)
+            best_val = max_v
+            best_loc = max_l
+            if best_val < 0.70:
+                for scale in (0.85, 1.15, 1.33):
+                    w = int(tw * scale)
+                    h = int(th * scale)
+                    if w > gw or h > gh:
+                        continue
+                    scaled_tpl = cv2.resize(self.template_gray, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
+                    r = cv2.matchTemplate(gray, scaled_tpl, cv2.TM_CCOEFF_NORMED)
+                    _, mv, _, ml = cv2.minMaxLoc(r)
+                    if mv > best_val:
+                        best_val = mv
+                        best_loc = ml
+            if best_val >= 0.65:
+                slot = "MANDANTE" if best_loc[0] < 250 else "VISITANTE"
+                self.ultimo_slot = slot
+                self.ultimo_score = best_val
+                return slot, best_val
+            return None, best_val
+        except Exception:
+            return None, 0.0
 
 class TelemetriaPasses:
     def __init__(self):
@@ -1651,6 +1723,7 @@ class EstadoSistema:
         self.tenho_posse_bola = False
         self.sou_time_verde = True
         self.atacando_direita = True
+        self.tag_placar = ""
         self.radar_ativo = False
         self.rp2040_conectado = False
         self.vader_modo_conexao = "DONGLE / CABO AUTO"
@@ -2082,30 +2155,15 @@ def thread_controle_execucao(estado: EstadoSistema):
                     consumir_tecla(tecla_cruz)
                 dc = dict(dc_ref) if dc_ref else None
                 if dc:
-                    tipo = dc.get("tipo", "CABEÇA")
                     setor = dc.get("setor", "ÁREA")
-                    tag = dc.get("tag_hud", tipo)
+                    tag = dc.get("tag_hud", "CRUZAMENTO B")
                     dist_m = dc.get("dist_metros", 25.0)
                     tempo_sec = max(0.095, min(0.350, dc["tempo_ms"] / 1000.0))
                     vetor_dir = dc.get("vetor_direcao") if usar_mira_360 else None
-                    print(f"\n[DISPARO] ⚡ Cruzamento IA: {tag} ({setor}) | Dist={dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms")
-                    if tipo == "RASTEIRO":
-                        t2 = max(0.065, tempo_sec * 0.70)
-                        etapas = [
-                            (0.000, directx_press, SCAN_D),
-                            (0.040, directx_release, SCAN_D),
-                            (0.075, directx_press, SCAN_D),
-                            (0.075 + t2, directx_release, SCAN_D)
-                        ]
-                        executor.agendar_sequencia(etapas, 0.075 + t2, vetor_dir, injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
-                    elif tipo in ("BALAO_ALTO", "ANTECIPADO"):
-                        executor.agendar_combo(SCAN_D, tempo_sec, sc_modificador=SCAN_Q, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
-                    elif tipo == "FENOMENAL":
-                        executor.agendar_combo(SCAN_D, tempo_sec, sc_modificador=SCAN_E, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
-                    else:
-                        executor.agendar_combo(SCAN_D, tempo_sec, sc_modificador=None, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
+                    print(f"\n[DISPARO] ⚡ Cruzamento B Normal: {tag} ({setor}) | Dist={dist_m:.1f}m | Barra={tempo_sec*1000:.0f}ms")
+                    executor.agendar_combo(SCAN_D, tempo_sec, sc_modificador=None, vetor_dir=vetor_dir, injetar_setas_dx=injetar_setas_dx, rp2040_ativo=estado.rp2040_conectado)
                 else:
-                    print("\n[DISPARO] ⚡ Cruzamento Manual (Sem alvo na área) -> D (170ms)")
+                    print("\n[DISPARO] ⚡ Cruzamento Manual B (Sem alvo na área) -> D (170ms)")
                     executor.agendar_combo(SCAN_D, 0.170, sc_modificador=None, vetor_dir=None, injetar_setas_dx=False, rp2040_ativo=estado.rp2040_conectado)
             ant_cruz = press_cruz
             ant_btn_b = press_btn_b
@@ -2285,6 +2343,10 @@ def thread_visao_radar(estado: EstadoSistema):
     bola_ant = None
     ultimo_rumble_chute = 0.0
     ultimo_rumble_tabela = 0.0
+    ultimo_rumble_facao = 0.0
+    ultimo_check_placar = 0.0
+    ultimo_slot_placar = None
+    detector_placar = DetectorPlacarTime()
     posse_estavel = True
     contador_histerese_posse = 0
     while estado.rodando:
@@ -2299,11 +2361,39 @@ def thread_visao_radar(estado: EstadoSistema):
                 cursor_ant = cursor_usuario
             if pos_bola is not None:
                 bola_ant = pos_bola
-            modo = estado.config.get("modo_cor_time", "AUTO")
-            if modo == "VERDE":
+            modo = estado.config.get("modo_cor_time", "GRE_AUTO")
+            if modo == "GRE_AUTO":
+                agora_ts = time.perf_counter()
+                if agora_ts - ultimo_check_placar > 1.20:
+                    ultimo_check_placar = agora_ts
+                    try:
+                        placar_roi = estado.config.get("placar_roi", PLACAR_ROI_PADRAO)
+                        screenshot_placar = np.array(sct.grab(placar_roi))
+                        img_placar_bgr = cv2.cvtColor(screenshot_placar, cv2.COLOR_BGRA2BGR)
+                        slot_detectado, score_detectado = detector_placar.detectar_posicao(img_placar_bgr)
+                        if slot_detectado:
+                            slot_mudou = (slot_detectado != ultimo_slot_placar)
+                            ultimo_slot_placar = slot_detectado
+                            if slot_detectado == "MANDANTE":
+                                estado.sou_time_verde = True
+                                estado.tag_placar = "GRE MANDANTE (1º)"
+                                if slot_mudou:
+                                    estado.atacando_direita = True
+                                    print(f"\n[PLACAR IA] 🏟️ Grêmio detectado como MANDANTE (Score={score_detectado:.2f}) -> Atacando DIREITA (1ºT)")
+                            elif slot_detectado == "VISITANTE":
+                                estado.sou_time_verde = False
+                                estado.tag_placar = "GRE VISITANTE (2º)"
+                                if slot_mudou:
+                                    estado.atacando_direita = False
+                                    print(f"\n[PLACAR IA] 🏟️ Grêmio detectado como VISITANTE (Score={score_detectado:.2f}) -> Atacando ESQUERDA (1ºT)")
+                    except Exception:
+                        pass
+            elif modo == "VERDE":
                 estado.sou_time_verde = True
+                estado.tag_placar = "FORÇADO VERDE"
             elif modo == "VERMELHO":
                 estado.sou_time_verde = False
+                estado.tag_placar = "FORÇADO VERMELHO"
             else:
                 if cursor_usuario is not None:
                     dist_verde = min([math.hypot(cursor_usuario[0] - v[0], cursor_usuario[1] - v[1]) for v in verdes], default=999)
@@ -2313,11 +2403,13 @@ def thread_visao_radar(estado: EstadoSistema):
                         votos_verm = 0
                         if votos_verde >= 10:
                             estado.sou_time_verde = True
+                            estado.tag_placar = "AUTO CURSOR VERDE"
                     elif dist_verm < dist_verde and dist_verm < 14:
                         votos_verm += 1
                         votos_verde = 0
                         if votos_verm >= 10:
                             estado.sou_time_verde = False
+                            estado.tag_placar = "AUTO CURSOR VERMELHO"
             meus_jogadores = list(verdes if estado.sou_time_verde else vermelhos)
             adversarios = list(vermelhos if estado.sou_time_verde else verdes)
             atacando_direita = estado.atacando_direita
@@ -2405,6 +2497,16 @@ def thread_visao_radar(estado: EstadoSistema):
                         cor_linha = (0, 240, 255) if melhor_passe.get("rompimento") else ((255, 0, 200) if tipo_p == "FENOMENAL_CURVA" else (0, 255, 180))
                         cv2.line(overlay, portador, df, cor_linha, 2)
                         cv2.circle(overlay, df, 7, cor_linha, 2)
+                    # Alerta Háptico (Vibração no controle) sempre que um atacante faz o facão rompendo a zaga
+                    if feedback_haptico and tenho_posse and estado.config.get("rumble_alerta_facao", True):
+                        tem_facao = (melhor_passe.get("rompimento") and not melhor_passe.get("bloqueado") and not melhor_passe.get("impedido"))
+                        if not tem_facao and todos_candidatos:
+                            tem_facao = any(c.get("rompimento") and not c.get("bloqueado") and not c.get("impedido") for c in todos_candidatos)
+                        if tem_facao:
+                            agora_ts = time.perf_counter()
+                            if agora_ts - ultimo_rumble_facao > 1.25:
+                                ultimo_rumble_facao = agora_ts
+                                disparar_rumble_haptico(left_speed=44000, right_speed=44000, duracao_s=0.18)
                 melhor_cruz = processador.analisar_cruzamento_tatico(
                     portador, companheiros, adversarios,
                     atacando_direita=atacando_direita, linha_zaga=linha_x
@@ -2412,8 +2514,7 @@ def thread_visao_radar(estado: EstadoSistema):
                 if melhor_cruz:
                     df_c = melhor_cruz["destino_futuro"]
                     tag_c = melhor_cruz["tag_hud"]
-                    tipo_c = melhor_cruz["tipo"]
-                    cor_cruz = (255, 0, 200) if tipo_c == "FENOMENAL" else ((0, 220, 255) if tipo_c == "RASTEIRO" else ((0, 255, 255) if tipo_c in ("BALAO_ALTO", "ANTECIPADO") else (0, 255, 120)))
+                    cor_cruz = (0, 220, 255)
                     cv2.line(overlay, portador, df_c, cor_cruz, 1, cv2.LINE_AA)
                     cv2.circle(overlay, df_c, 5, cor_cruz, -1)
                     cv2.putText(overlay, tag_c, (max(2, df_c[0] - 25), max(10, df_c[1] + 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.32, cor_cruz, 1)
@@ -2579,6 +2680,7 @@ class OverlayInGame:
         with self.estado.lock:
             posse = self.estado.tenho_posse_bola
             sou_verde = self.estado.sou_time_verde
+            placar_tag = getattr(self.estado, "tag_placar", "")
             dp = self.estado.dados_passe
             dc = self.estado.dados_chute
             ddef = self.estado.dados_defesa
@@ -2586,7 +2688,8 @@ class OverlayInGame:
             perfil = self.estado.config.get("perfil_assistencia", "PA1_PA2")
             haptico = self.estado.config.get("feedback_haptico", True)
             autofacao = self.estado.config.get("auto_disparo_facao", False)
-        time_str = "VERDE" if sou_verde else "VERMELHO"
+        base_time = "VERDE" if sou_verde else "VERMELHO"
+        time_str = f"{base_time} ({placar_tag})" if placar_tag else base_time
         posse_str = "🟢 POSSE DE BOLA" if posse else "🛡️ DEFENDENDO (ANTI-1-2)"
         rp_str = "RP2040 1000Hz" if rp else "DirectX"
         self.lbl_status.configure(
@@ -2713,9 +2816,10 @@ class InterfaceMestre:
             bg="#0c0c14", fg="#00ffcc", font=("Segoe UI", 9, "bold"), padx=10, pady=4
         )
         frame_time.pack(fill="x", padx=10, pady=4)
-        self.var_modo = tk.StringVar(value=self.estado.config.get("modo_cor_time", "AUTO"))
+        self.var_modo = tk.StringVar(value=self.estado.config.get("modo_cor_time", "GRE_AUTO"))
         for val, txt in [
-            ("AUTO", "Automático (Anel Amarelo sobre jogador com a bola)"),
+            ("GRE_AUTO", "Placar Automático (Detecta 'GRE' Grêmio no Placar: 1º=Mandante / 2º=Visitante)"),
+            ("AUTO", "Automático por Radar (Anel Amarelo sobre jogador com a bola)"),
             ("VERDE", "Forçar Verde (Mandante)"),
             ("VERMELHO", "Forçar Vermelho (Visitante)")
         ]:
@@ -2741,6 +2845,14 @@ class InterfaceMestre:
             font=("Segoe UI", 8, "bold")
         )
         cb_autofacao.pack(anchor="w", pady=1)
+        self.var_rumble_facao = tk.BooleanVar(value=self.estado.config.get("rumble_alerta_facao", True))
+        cb_rumble_facao = tk.Checkbutton(
+            frame_time, text="Alerta Háptico Flydigi (Controle treme quando atacante faz o facão sobre a zaga)",
+            variable=self.var_rumble_facao, command=self.mudar_rumble_facao,
+            bg="#0c0c14", fg="#00ffcc", selectcolor="#1c1c30", activebackground="#0c0c14",
+            font=("Segoe UI", 8, "bold")
+        )
+        cb_rumble_facao.pack(anchor="w", pady=1)
         self.var_desafogo = tk.BooleanVar(value=self.estado.config.get("modo_desafogo_pressao", True))
         cb_desafogo = tk.Checkbutton(
             frame_time, text="Ativar Modo Desafogo Rápido (Quick-Release sob pressão < 1.9m)",
@@ -2931,6 +3043,10 @@ class InterfaceMestre:
         with self.estado.lock:
             self.estado.config["auto_disparo_facao"] = bool(self.var_autofacao.get())
             self.estado.salvar_config()
+    def mudar_rumble_facao(self):
+        with self.estado.lock:
+            self.estado.config["rumble_alerta_facao"] = bool(self.var_rumble_facao.get())
+            self.estado.salvar_config()
     def mudar_desafogo(self):
         with self.estado.lock:
             self.estado.config["modo_desafogo_pressao"] = bool(self.var_desafogo.get())
@@ -3009,6 +3125,9 @@ class InterfaceMestre:
             self.var_overlay.set(cfg_ovl)
         self.overlay.atualizar()
         cor_str = "VERDE" if self.estado.sou_time_verde else "VERMELHO"
+        placar_tag = getattr(self.estado, "tag_placar", "")
+        if placar_tag:
+            cor_str = f"{cor_str} ({placar_tag})"
         dir_str = "Direita (->)" if self.estado.atacando_direita else "Esquerda (<-)"
         rp_str = "RP2040 360°" if self.estado.rp2040_conectado else "DirectX"
         vader_str = getattr(self.estado, "vader_modo_conexao", "DONGLE/CABO")
